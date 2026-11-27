@@ -9,8 +9,6 @@
 use gpui_kit::assets::IconName as CatalogIcon;
 use gpui_kit::{ClickEvent, Modifiers};
 
-use engine::file_reader_function;
-
 use crate::detail_view::ArchiveDetail;
 use crate::model::{ArchiveKind, ArchiveStatus, TagTarget};
 
@@ -150,11 +148,9 @@ pub fn can_view_stats(detail: &ArchiveDetail) -> bool {
         return false;
     }
     match detail.kind {
-        ArchiveKind::File => detail
-            .payload_rel_path
-            .as_deref()
-            .and_then(file_reader_function)
-            .is_some(),
+        // 文件：能力事实由归档探测写入 `structured`（详情里的 `duckdb_readable`），
+        // 不再按扩展名二次猜——猜错会把能读的挡掉、也会把读不了的放进取样。
+        ArchiveKind::File => detail.payload_rel_path.is_some() && detail.duckdb_readable,
         ArchiveKind::TableRef => {
             // 全局引用：本体在全局分析库，按登记的实际表名只读取样即可。
             if detail.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL) {

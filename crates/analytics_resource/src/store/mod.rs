@@ -17,6 +17,7 @@ use crate::model::*;
 use self::rows::*;
 
 pub mod checkout_receipt;
+pub mod file_asset;
 pub mod folder;
 pub mod refs;
 pub mod resource;
@@ -24,6 +25,7 @@ pub mod rows;
 pub mod schema_guard;
 pub mod schema_sql;
 pub mod semantics;
+pub mod table_asset;
 pub mod tag;
 pub mod timeline;
 pub mod version;

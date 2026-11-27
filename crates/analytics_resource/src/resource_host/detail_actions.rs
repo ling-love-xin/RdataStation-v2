@@ -1,7 +1,7 @@
 //! 详情动作：打开、统计、取回、升级/分发、指纹核对、版本历史。
 
-use shared::i18n::tr;
 use super::*;
+use shared::i18n::tr;
 
 /// 表型取数的唯一入口（双击打开与「查看统计」共用）。
 ///
@@ -14,14 +14,23 @@ fn open_analytics_table(host: &ResourceHost, detail: &ArchiveDetail, cx: &mut Ap
         host.notice(tr("资产库：这条表型资产没有登记表名，无法取样"), cx);
         return;
     };
+    // 表资产的本体是不可变快照，位于 `rds_archive`；已限定名不再补。
+    let table_ref = if table.contains('.') {
+        table.to_string()
+    } else {
+        format!("rds_archive.{table}")
+    };
     // 全局行的本体在**全局**分析库（另一个文件）：只能经短命会话挂 `rds_global`
     // 读；项目行的表就在当前项目库里，直取即可。
     let source = match detail.scope {
         crate::model::RowScope::Global => {
-            insight::SampleSource::on_global(table, detail.name.clone())
+            insight::SampleSource::on_global(table_ref, detail.name.clone())
         }
         _ => {
-            let sql = format!("SELECT * FROM {};", crate::global::quote_ident(table));
+            let sql = format!(
+                "SELECT * FROM {};",
+                crate::global::sql::qualified_ident(&table_ref)
+            );
             insight::SampleSource::on_duckdb(sql, detail.name.clone())
         }
     };
@@ -36,7 +45,12 @@ fn open_global_ref(host: &ResourceHost, detail: &ArchiveDetail, cx: &mut App) {
         return;
     };
     let label = detail.alias.clone().unwrap_or_else(|| detail.name.clone());
-    let source = insight::SampleSource::on_global(table, label.clone());
+    let table_ref = if table.contains('.') {
+        table.to_string()
+    } else {
+        format!("rds_archive.{table}")
+    };
+    let source = insight::SampleSource::on_global(table_ref, label.clone());
     host.backend.open_insight_source_table(source, label, cx);
     host.notice(
         format!(
@@ -47,8 +61,12 @@ fn open_global_ref(host: &ResourceHost, detail: &ArchiveDetail, cx: &mut App) {
     );
 }
 
-pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_open(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         // 全局引用：没有本地本体，按登记的实际全局表名只读取样。
         if detail.kind == ArchiveKind::TableRef
             && detail.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL)
@@ -60,7 +78,10 @@ pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window:
         if detail.kind == ArchiveKind::AnalyticsTable {
             open_analytics_table(host, detail, cx);
             host.notice(
-                format!("资产库：已在洞察面板打开「{}」（取样）——本体仍只读", detail.name),
+            format!(
+                "资产库：已在洞察面板打开「{}」（取样）——本体仍只读",
+                detail.name
+            ),
                 cx,
             );
             return;
@@ -93,22 +114,13 @@ pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window:
                 }
             }
         }
-        // **数据文件不走编辑器文本**：双击/打开要看的是数据本身；`.sql` / `.md` 这类不是
-        // 数据，仍进编辑器。判定与「查看统计」同一口径——扩展名白名单只有一处
-        // （`engine::duckdb::file_reader_function`），不按种类分。
+        // **DuckDB 读得动就走只读取样，否则进编辑器只读**：判据是归档时写入的
+        // `structured`（详情里的 `duckdb_readable`），不再按扩展名猜。文本 / 二进制
+        // 都走编辑器只读；二进制要看元信息，编辑器侧自己按内容拒绝渲染。
         //
         // 走洞察的取样入口（与右键「查看统计」同一个）：那边把本体当只读源表读出来
         // （D58：取样 → 临时表），用户能直接看到这张表的形状与数据。
-        //
-        // 注：原型 P4.4 想要的是“编辑器结果表格（只读）”，那需要编辑器侧先开一个
-        // “以结果区打开数据文件”的 API（现在只有“打开文本 + 执行”），属 P4.4 余项；
-        // 在此之前“双击能看见数据”这件事由洞察入口承担，比摆一个点了没反应的按钮强。
-        if detail
-            .payload_rel_path
-            .as_deref()
-            .and_then(engine::duckdb::file_reader_function)
-            .is_some()
-        {
+        if detail.duckdb_readable {
             match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
                 Ok(source) => {
                     let name = detail.name.clone();
@@ -127,8 +139,12 @@ pub(super) fn request_open(host: &ResourceHost, detail: &ArchiveDetail, _window:
         host.backend.request_open_in_editor_read_only(path, cx);
 }
 
-pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_view_stats(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         // 面板只给「能取到数」的行摆入口（`can_view_stats`），这里仍按种类分流：
         // 走得通的那类把**取样来源**交给洞察侧（D58），走不通的给回执而不是静默。
         match detail.kind {
@@ -137,6 +153,16 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
                 let Some(path) = host.payload_path(detail, cx) else {
                     return;
                 };
+                if !detail.duckdb_readable {
+                    host.notice(
+                        format!(
+                            "资产库：「{}」没有可被 DuckDB 读取的结构，不能在洞察里取样",
+                            detail.name
+                        ),
+                        cx,
+                    );
+                    return;
+                }
                 match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
                     Ok(source) => {
                         host.backend
@@ -164,8 +190,7 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
                 // 所以按点拆段后交给共用助手加引号（与导航树「查看统计」同口径）。
                 let parts: Vec<&str> = table.split('.').collect();
                 let sql = host.backend.insight_sample_sql(conn_id, &parts);
-                let source =
-                    insight::SampleSource::new(conn_id.to_string(), sql, detail.name.clone());
+            let source = insight::SampleSource::new(conn_id.to_string(), sql, detail.name.clone());
                 host.backend
                     .open_insight_source_table(source, detail.name.clone(), cx);
             }
@@ -175,8 +200,12 @@ pub(super) fn request_view_stats(host: &ResourceHost, detail: &ArchiveDetail, _w
         }
 }
 
-pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_checkout(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    window: &mut Window,
+    cx: &mut App,
+) {
         let Some(root) = host.require_project("无法取回", cx) else {
             return;
         };
@@ -184,8 +213,6 @@ pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, wind
             host.notice(tr("资产库：项目为只读模式，不能取回"), cx);
             return;
         }
-        // 目标目录 = 草稿箱模块目录（取回产出的是一份**草稿**；目录名取自 crate 常量，
-        // 不在宿主里再写一次字面量）。
         let target_dir = root.join(crate::resource_host::SCRATCHPAD_DIR);
         let extension = detail
             .payload_rel_path
@@ -197,11 +224,30 @@ pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, wind
             file_name: suggest_work_copy_name(&detail.name, extension),
             target_dir_label: target_dir.to_string_lossy().to_string(),
             version: detail.version,
+            active_checkout: detail.checkout_label.clone(),
         };
 
         let backend = host.backend.clone();
-        let resource_id = detail.id.clone();
         let read_only = host.read_only();
+        if detail.scope == crate::model::RowScope::Global {
+            let name = detail.name.clone();
+            let version = detail.version;
+            open_checkout_dialog(window, cx, seed, move |result, cx| {
+                // 全局文件取回只写草稿箱 + 两侧租约；目标路径按草稿箱相对路径传下去。
+                resource_jobs::enqueue_global_checkout(
+                    root.clone(),
+                    name.clone(),
+                    version,
+                    result.file_name.clone(),
+                    result.open_after,
+                );
+                backend.refresh_resources(cx);
+                backend.notice("资产库：正在从全局取回…".to_string(), cx);
+            });
+            return;
+        }
+
+        let resource_id = detail.id.clone();
         open_checkout_dialog(window, cx, seed, move |result, cx| {
             let request = CheckoutRequest {
                 resource_id: resource_id.clone(),
@@ -213,8 +259,12 @@ pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, wind
         });
 }
 
-pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_promote_to_global(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         use crate::global::{PromoteKind, PromoteRequest};
         let Some(root) = host.require_project("无法升级到全局", cx) else {
             return;
@@ -232,29 +282,9 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
                     host.notice(format!("资产库：本体文件不存在（{rel}），无法升级"), cx);
                     return;
                 }
-                // 形态判定：数据文件 → 映射出表；文本脚本 → 内容表；其余（png / zip / docx 这类
-                // 二进制）**不能升级**。加固前一律落到 `PromoteKind::Script` 的 `read_to_string`，
-                // 撞 UTF-8 失败后把 `stream did not contain valid UTF-8` 原样丢给用户。
-                let kind = if is_data_file_ext(&abs) {
-                    PromoteKind::DataFile
-                } else if is_text_script_ext(&abs) {
-                    PromoteKind::Script
-                } else {
-                    let ext = abs
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("（无扩展名）")
-                        .to_ascii_lowercase();
-                    host.notice(
-                        format!(
-                            "资产库：{ext} 这类文件不能升级到全局——全局库只收能读成表的数据文件\
-（csv / tsv / parquet / xlsx / json 等）或文本脚本（sql / py / md 等）。\
-内容是数据的话，另存为 csv 再升级；纯二进制文件请留在项目里，用「分发」或共享目录传。"
-                        ),
-                        cx,
-                    );
-                    return;
-                };
+                // file-first：任意文件（含 png / zip / docx 等二进制）都进全局 CAS，
+                // 不再按扩展名猜测、也不再强制文本可读；表投影留到后续显式动作。
+                let kind = PromoteKind::File;
                 (abs, Some(rel.to_string()), kind, None)
             }
             None => {
@@ -272,7 +302,11 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
                         .join("analytics.duckdb"),
                     None,
                     PromoteKind::DataFile,
-                    Some(table.to_string()),
+                    Some(if table.contains('.') {
+                        table.to_string()
+                    } else {
+                        format!("rds_archive.{table}")
+                    }),
                 )
             }
         };
@@ -289,8 +323,10 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
                 source_resource_id: Some(detail.id.clone()),
                 source_version: Some(detail.version),
                 source_table,
-                // 一版一张表会增长：升级完按设置里的保留策略裁掉更早的表。
+                // 快照会随版本增长：升级完按设置里的保留策略裁掉更早的快照。
                 keep_versions: Some(host.backend.keep_versions(cx)),
+            // 升级动作没有「我看过全局 vN」的输入：首次发布或走覆盖冲突框。
+            base_global_version: None,
             },
             false,
         );
@@ -298,8 +334,12 @@ pub(super) fn request_promote_to_global(host: &ResourceHost, detail: &ArchiveDet
         host.notice("资产库：正在升级到全局…", cx);
 }
 
-pub(super) fn request_distribute_from_global(host: &ResourceHost, name: &str, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_distribute_from_global(
+    host: &ResourceHost,
+    name: &str,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         let Some(root) = host.require_project("无法从全局分发", cx) else {
             return;
         };
@@ -313,7 +353,13 @@ pub(super) fn request_distribute_from_global(host: &ResourceHost, name: &str, _w
         host.notice("资产库：正在从全局分发…", cx);
 }
 
-pub(super) fn request_reference_from_global(host: &ResourceHost, name: &str, global_version: i32, _window: &mut Window, cx: &mut App) {
+pub(super) fn request_reference_from_global(
+    host: &ResourceHost,
+    name: &str,
+    global_version: i32,
+    _window: &mut Window,
+    cx: &mut App,
+) {
     let Some(root) = host.require_project("无法引用全局资产", cx) else {
         return;
     };
@@ -327,7 +373,14 @@ pub(super) fn request_reference_from_global(host: &ResourceHost, name: &str, glo
     host.notice("资产库：正在引用到本项目…", cx);
 }
 
-pub(super) fn request_solidify_ref(host: &ResourceHost, resource_id: &str, project_version: i32, target: &str, _window: &mut Window, cx: &mut App) {
+pub(super) fn request_solidify_ref(
+    host: &ResourceHost,
+    resource_id: &str,
+    project_version: i32,
+    target: &str,
+    _window: &mut Window,
+    cx: &mut App,
+) {
     let Some(root) = host.require_project("无法固化引用版本", cx) else {
         return;
     };
@@ -335,22 +388,97 @@ pub(super) fn request_solidify_ref(host: &ResourceHost, resource_id: &str, proje
         host.notice(tr("资产库：项目为只读模式，不能固化引用版本"), cx);
         return;
     }
-    resource_jobs::enqueue_solidify(root, resource_id.to_string(), project_version, target.to_string());
+    resource_jobs::enqueue_solidify(
+        root,
+        resource_id.to_string(),
+        project_version,
+        target.to_string(),
+    );
     host.backend.refresh_resources(cx);
     host.notice("资产库：正在固化引用版本…", cx);
 }
 
-/// 从全局实例删除（刀 B）：确认框说清「删的是全局这一份，已分发副本不受影响」。
+/// 把全局资产恢复到历史版本：表型复制旧表，文件型复制旧副本，都生成新版本。
+///
+/// `from = None` 用「上一版」；时间线选中了某版时由面板传 `Some(version)`。
+pub(super) fn request_restore_global_previous(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    from: Option<i32>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let is_table = detail.kind == crate::ArchiveKind::AnalyticsTable;
+    let scope_label = if is_table { "表" } else { "文件" };
+    let Some(root) = host.require_project(&format!("无法恢复全局{scope_label}版本"), cx)
+    else {
+        return;
+    };
+    if detail.version <= 1 {
+        host.notice(tr("资产库：当前已经是 v1，没有历史版本可恢复"), cx);
+        return;
+    }
+    let from_version = from
+        .filter(|version| *version >= 1 && *version < detail.version)
+        .unwrap_or(detail.version - 1);
+    let name = detail.name.clone();
+    let description = if is_table {
+        format!(
+            "将把全局「{name}」的 v{from_version} 那张表复制成一个新版本（v{}）：当前 v{} 保留为历史，v{from_version} 那张表也不动。\n恢复会重新生成全局表；已分发到项目的副本不受影响。\n旧表若已被保留策略裁掉，恢复会明确拒绝。",
+            detail.version + 1,
+            detail.version
+        )
+    } else {
+        format!(
+            "将把全局「{name}」的 v{from_version} 内容副本恢复成一个新版本（v{}）：当前 v{} 保留为历史，v{from_version} 及其副本也不动。\n恢复会重建全局文件当前缓存；已分发到项目的副本不受影响。\n版本副本若已被保留策略裁掉，恢复会明确拒绝。",
+            detail.version + 1,
+            detail.version
+        )
+    };
+    let backend = host.backend.clone();
+    window.open_alert_dialog(cx, move |alert, _window, _cx| {
+        let backend = backend.clone();
+        let root = root.clone();
+        let name = name.clone();
+        let description = description.clone();
+        alert
+            .confirm()
+            .title(format!("恢复 v{from_version} {scope_label}？"))
+            .description(description)
+            .button_props(
+                gpui_kit::component::dialog::DialogButtonProps::default()
+                    .ok_text("恢复")
+                    .show_cancel(true),
+            )
+            .on_ok(move |_, _window, cx| {
+                resource_jobs::enqueue_restore_global_version(
+                    root.clone(),
+                    name.clone(),
+                    from_version,
+                    is_table,
+                );
+                backend.refresh_resources(cx);
+                say(
+                    &backend,
+                    &format!("资产库：正在恢复全局{scope_label}版本…"),
+                    cx,
+                );
+                true
+            })
+    });
+}
+
+/// 移入全局回收站（刀 B）：确认框说清「只软删全局这一份，表与版本仍在，可恢复」。
 pub(super) fn request_delete_global(
     host: &ResourceHost,
     detail: &ArchiveDetail,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some(root) = host.require_project("无法删除全局资产", cx) else {
+    let Some(root) = host.require_project("无法移入全局回收站", cx) else {
         return;
     };
-    // 不检查项目只读：删除只动全局库，不写项目分析库 / resources。
+    // 不检查项目只读：回收站只动全局登记，不写项目分析库 / resources。
     let name = detail.name.clone();
     // 分发面来自详情快照（`dispatch_label`）：让用户看见"这些项目里还有副本"再决定。
     let dispatched = if detail.dispatch_label.trim().is_empty() {
@@ -359,7 +487,7 @@ pub(super) fn request_delete_global(
         detail.dispatch_label.clone()
     };
     let description = format!(
-        "将从全局分析库删除「{name}」的全部版本表，并清掉全局登记与分发回执。\n{dispatched}：其中已分发到项目的副本不受影响，仍可继续使用。\n此操作不可撤销。"
+        "将把全局分析库里的「{name}」当前版本移入全局回收站：只软删全局登记，表与版本快照都保留，之后可以从回收站恢复。\n{dispatched}：已分发到项目的副本不受影响，仍可继续使用。\n永久删除要再进回收站执行。"
     );
     let backend = host.backend.clone();
     window.open_alert_dialog(cx, move |alert, _window, _cx| {
@@ -369,18 +497,18 @@ pub(super) fn request_delete_global(
         let description = description.clone();
         alert
             .confirm()
-            .title("从全局实例删除？")
+            .title("移入全局回收站？")
             .description(description)
             .button_props(
                 gpui_kit::component::dialog::DialogButtonProps::default()
-                    .ok_text("删除")
+                    .ok_text("移入回收站")
                     .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
                     .show_cancel(true),
             )
             .on_ok(move |_, _window, cx| {
                 resource_jobs::enqueue_delete_global(root.clone(), name.clone());
                 backend.refresh_resources(cx);
-                say(&backend, "资产库：正在删除全局资产…", cx);
+                say(&backend, "资产库：正在移入全局回收站…", cx);
                 true
             })
     });
@@ -405,12 +533,15 @@ pub(super) fn request_show_origin_chain(
 }
 
 pub(super) fn is_reference_stale(host: &ResourceHost, resource_id: &str) -> bool {
-
         host.backend.is_reference_stale(resource_id)
 }
 
-pub(super) fn accept_reference_current(host: &ResourceHost, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn accept_reference_current(
+    host: &ResourceHost,
+    detail: &ArchiveDetail,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         let Some(root) = host.require_project("无法接受当前内容", cx) else {
             return;
         };
@@ -440,17 +571,19 @@ pub(super) fn accept_reference_current(host: &ResourceHost, detail: &ArchiveDeta
             },
             tags: Vec::new(),
             group_id: None,
-            keep_versions: None,
             existing_resource_id: Some(detail.id.clone()),
         };
-        let keep_versions = host.backend.keep_versions(cx);
-        resource_jobs::enqueue_archive(root, host.read_only(), request, keep_versions, false, None);
+        resource_jobs::enqueue_archive(root, host.read_only(), request, false, None);
         host.backend.refresh_resources(cx);
         host.notice(tr("资产库：正在接受当前内容并生成新版本…"), cx);
 }
 
-pub(super) fn request_version_history(host: &ResourceHost, resource_id: &str, _window: &mut Window, cx: &mut App) {
-
+pub(super) fn request_version_history(
+    host: &ResourceHost,
+    resource_id: &str,
+    _window: &mut Window,
+    cx: &mut App,
+) {
         // 取数在后台线程：版本行要读索引表 + 问 `.RSmeta` 下的副本清单，
         // 回来之后由侧栏轮询开窗（开窗要 `Window`，轮询任务里没有）。
         let Some(root) = host.require_project("无法打开版本历史", cx) else {

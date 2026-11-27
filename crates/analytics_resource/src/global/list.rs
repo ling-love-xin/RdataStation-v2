@@ -2,6 +2,27 @@
 
 use super::*;
 
+/// 按 id 读一条全局资源（全局版本历史对话框用：项目库没有这个 id）。
+pub fn get_global_resource(
+    store: &GlobalInstanceStore,
+    id: &str,
+) -> Result<Option<AnalyticsResource>, CoreError> {
+    store.with_sqlite(|conn| {
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {} FROM analytics_resources \
+                 WHERE id = ?1 AND scope = 'global' AND deleted_at IS NULL",
+                RESOURCE_COLUMNS
+            ))
+            .map_err(sqlite_err("get_global_resource"))?;
+        match stmt.query_row(rusqlite::params![id], map_resource_row) {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(sqlite_err("get_global_resource_row")(error)),
+        }
+    })
+}
+
 /// 列出全局资源（scope = 'global' 的活跃行，按更新时间倒序）。
 ///
 /// 展示层（资源列表「全局实例」维度）与宿主「升级到全局」后的确认都用它。

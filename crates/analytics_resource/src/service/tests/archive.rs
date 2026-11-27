@@ -3,8 +3,8 @@
 use super::*;
 
 #[tokio::test]
-async fn t101_archive_first_time_copies_payload_and_writes_registry() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+async fn t101_archive_first_time_consumes_draft_and_writes_registry() {
+    let (service, dir) = test_service().await;
     let mut events = service.subscribe();
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
 
@@ -15,8 +15,8 @@ async fn t101_archive_first_time_copies_payload_and_writes_registry() {
 
     assert!(outcome.created_new_version);
     assert_eq!(outcome.version, 1);
-    // copy 语义（2026-10-13 裁决）：归档是**复制**，草稿保留为工作副本（checkout 语义）。
-    assert!(draft.exists(), "归档是复制：草稿箱那份保留为工作副本");
+    // 新语义：归档消费草稿，本体只在资产库保留一份（CAS + resources/）。
+    assert!(!draft.exists(), "归档后草稿应被消费");
 
     let payload = service
         .payload()
@@ -25,6 +25,21 @@ async fn t101_archive_first_time_copies_payload_and_writes_registry() {
         .join("dau.sql");
     assert!(payload.is_file());
     assert!(service.payload().is_readonly(&payload), "本体应只读");
+
+    let file_version = service
+        .store()
+        .file_asset_version(&outcome.resource_id, 1)
+        .await
+        .expect("file version")
+        .expect("v1 文件版本索引");
+    assert_eq!(file_version.content_hash, outcome.content_hash);
+    assert_eq!(file_version.parent_version, None);
+    service
+        .payload()
+        .cas()
+        .read_manifest(&file_version.manifest_id)
+        .await
+        .expect("manifest 可读且校验通过");
 
     let row = service
         .store()
@@ -59,7 +74,7 @@ async fn t101_archive_first_time_copies_payload_and_writes_registry() {
 
 #[tokio::test]
 async fn t102_archive_refuses_occupied_target_and_keeps_source() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let first = write_draft(&dir, "a.sql", b"select 1;").await;
     service
         .archive(archive_req(&first, "same.sql", None))
@@ -83,7 +98,7 @@ async fn t102_archive_refuses_occupied_target_and_keeps_source() {
 
 #[tokio::test]
 async fn t103_archive_rolls_back_payload_when_index_write_fails() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
 
     // 故障注入：用触发器让"写索引"必然失败（比构造数据冲突更贴近真实失败路径）。
     {
@@ -118,7 +133,7 @@ async fn t103_archive_rolls_back_payload_when_index_write_fails() {
 
 #[tokio::test]
 async fn t105_rearchive_with_same_content_is_idempotent() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
     let first = service
         .archive(archive_req(&draft, "dau.sql", None))
@@ -160,7 +175,7 @@ async fn t105_rearchive_with_same_content_is_idempotent() {
 async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
     use crate::analysis::{AnalysisFacts, ColumnSpec};
 
-    let (service, dir) = test_service(5).await;
+    let (service, dir) = test_service().await;
     let draft = write_draft(
         &dir,
         "dau.csv",
@@ -180,11 +195,15 @@ async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
     let mut req = archive_req(&draft, "dau.csv", None);
     req.kind = ArchiveKind::File;
     req.analysis = Some(facts.clone());
+    let expected_hash = service
+        .payload()
+        .content_hash(&draft)
+        .await
+        .expect("draft hash");
     let first = service.archive(req).await.expect("archive analysis");
     assert_eq!(
-        first.content_hash,
-        facts.fingerprint(),
-        "分析表登记的是结构指纹，不是文件字节指纹"
+        first.content_hash, expected_hash,
+        "文件资产的内容指纹是字节 sha256，结构只作为元信息"
     );
 
     let stored = service
@@ -215,8 +234,14 @@ async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
         ..facts.clone()
     });
     let second = service.archive(same_schema).await.expect("re-archive same");
-    assert_eq!(second.version, first.version, "行数变化不算内容变化");
-    assert!(!second.created_new_version, "幂等：不产生新版本");
+    assert_eq!(second.version, first.version + 1, "文件字节变了就是新版本");
+    assert!(second.created_new_version, "字节变化产生新版本");
+    let stored = service
+        .store()
+        .get_resource_by_id(&first.resource_id)
+        .await
+        .expect("reload after second");
+    assert_eq!(stored.row_count, Some(3), "行数作为元信息跟着更新");
 
     // 结构变了（多一列）→ 指纹变 → 新版本，且定义 / 规模随更新。
     let draft3 = write_draft(
@@ -239,7 +264,7 @@ async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
         row_count: Some(1),
     });
     let third = service.archive(changed).await.expect("re-archive changed");
-    assert_eq!(third.version, first.version + 1, "结构变了要涨版本");
+    assert_eq!(third.version, second.version + 1, "结构变了要涨版本");
     let stored = service
         .store()
         .get_resource_by_id(&first.resource_id)
@@ -250,8 +275,8 @@ async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
 }
 
 #[tokio::test]
-async fn t106_rearchive_changed_content_bumps_version_and_keeps_copy() {
-    let (service, dir) = test_service(1).await;
+async fn t106_rearchive_changed_content_bumps_version_and_consumes_copy() {
+    let (service, dir) = test_service().await;
     let mut events = service.subscribe();
     let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
     let first = service
@@ -286,16 +311,9 @@ async fn t106_rearchive_changed_content_bumps_version_and_keeps_copy() {
 
     assert!(second.created_new_version);
     assert_eq!(second.version, 2, "内容变了版本 +1");
-    // copy 档（2026-10-13 裁决）：再归档同样**不搬走**工作副本。
-    // 旧实现走 `replace_payload → archive_in` 的 move 语义把草稿移走了，与首次归档的 copy
-    // 口径自相矛盾；P0-1 改走「暂存 → 索引事务 → 原子替换」后草稿保留为工作副本。
-    assert!(copy.exists(), "再归档同样是 copy：草稿保留为工作副本");
-    let draft_content = fs::read(&copy).await.expect("read copy");
-    assert_eq!(
-        draft_content.as_slice(),
-        b"select 22;",
-        "工作副本内容不被再归档改动"
-    );
+    // 新语义：再归档同样消费工作副本；资产库只保留归档本体。
+    assert!(!copy.exists(), "再归档后工作副本应被消费");
+    assert!(!draft.exists(), "首次归档已消费原草稿");
 
     let payload = service.payload().resources_dir().join("dau.sql");
     assert_eq!(
@@ -340,62 +358,12 @@ async fn t106_rearchive_changed_content_bumps_version_and_keeps_copy() {
     let _ = fs::remove_dir_all(&dir).await;
 }
 
-/// 保留策略的两端：`All`（设置项 `-1`）一份不裁，`MetadataOnly`（`0`）副本全清——
-/// 两端都不动**版本行**（元数据永远保留，架构 §5.2）。
-#[tokio::test]
-async fn t130_keep_policy_ends_are_respected() {
-    for (policy, expected_copies) in [
-        (KeepVersions::All, vec![2, 1]),
-        (KeepVersions::MetadataOnly, Vec::new()),
-    ] {
-        let (service, dir) = test_service_with(policy).await;
-        let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
-        let first = service
-            .archive(archive_req(&draft, "dau.sql", None))
-            .await
-            .expect("archive");
-
-        // 连着改两次内容：每次再归档都会把上一版留成一份内容副本。
-        for (name, body) in [
-            ("dau2.sql", &b"select 22;"[..]),
-            ("dau3.sql", &b"select 333;"[..]),
-        ] {
-            let next = write_draft(&dir, name, body).await;
-            service
-                .archive(archive_req(&next, "dau.sql", Some(&first.resource_id)))
-                .await
-                .expect("re-archive");
-        }
-
-        assert_eq!(
-            service
-                .payload()
-                .version_copies(&first.resource_id)
-                .await
-                .expect("copies"),
-            expected_copies,
-            "{policy:?} 的副本保留结果"
-        );
-        assert_eq!(
-            service
-                .store()
-                .get_resource_versions(&first.resource_id)
-                .await
-                .expect("version rows")
-                .len(),
-            2,
-            "裁剪只动副本：版本行两个（v1 / v2 写前快照）应全在"
-        );
-        let _ = fs::remove_dir_all(&dir).await;
-    }
-}
-
 /// 归档时填的**标签与分组真的落上**（之前 `ArchiveRequest` 的这两项没人消费，填了等于白填）：
 /// 标签按名字找 / 找不到就建（同名复用），分组就是移动语义；不存在的分组只给回执说明、
 /// **不回滚归档本身**（文件已经归档好了，分组是能在面板上补做的附属项）。
 #[tokio::test]
 async fn t131_archive_applies_tags_and_group() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let folder = service
         .store()
         .create_folder(crate::store::rows::CreateFolderRequest {
@@ -473,6 +441,165 @@ async fn t131_archive_applies_tags_and_group() {
         "说明要说清是哪一项没落上：{:?}",
         outcome.notes[0]
     );
+
+    let _ = fs::remove_dir_all(&dir).await;
+}
+
+/// 文件元数据随 manifest 往返：归档收 sidecar，取回交回 `FileMeta`；
+/// 内容不变、只有元数据变时仍应产生新版本；同一资产同时只允许一条 active 租约。
+#[tokio::test]
+async fn t132_file_meta_roundtrip_and_single_active_lease() {
+    let (service, dir) = test_service().await;
+    let draft = write_draft(&dir, "meta.sql", b"select 1;").await;
+    let meta_path = dir
+        .join(".RSmeta")
+        .join("scratchpad")
+        .join("meta")
+        .join("meta.sql.meta.json");
+    let mut meta = file_meta::FileMeta::default();
+    meta.last_connection = Some("conn_meta".to_string());
+    meta.bookmarks.push(file_meta::Bookmark {
+        line: 1,
+        label: "起点".to_string(),
+    });
+    file_meta::write_meta_at(&meta_path, &meta).expect("seed meta");
+
+    let mut req = archive_req(&draft, "meta.sql", None);
+    req.binding.promoted_from = Some("scratchpad/meta.sql".to_string());
+    let first = service.archive(req).await.expect("archive with meta");
+    assert!(!draft.exists(), "归档消费草稿");
+    let v1 = service
+        .store()
+        .file_asset_version(&first.resource_id, 1)
+        .await
+        .expect("v1")
+        .expect("v1 row");
+    assert!(v1.meta_hash.is_some(), "sidecar 应作为 manifest 条目入库");
+
+    let copy = dir.join("scratchpad").join("meta（工作副本）.sql");
+    let checkout = service
+        .checkout(CheckoutRequest {
+            resource_id: first.resource_id.clone(),
+            dest_path: copy.clone(),
+        })
+        .await
+        .expect("checkout");
+    assert_eq!(
+        checkout.file_meta.as_ref(),
+        Some(&meta),
+        "取回应把 manifest 里的完整 FileMeta 交回"
+    );
+    // 批量活跃租约（刷新快照用）：一次查完整张表，按资源 id 建映射。
+    let active = service.store().active_leases().await.expect("active leases");
+    let lease = active.get(&first.resource_id).expect("该资产应有活跃取回");
+    assert_eq!(lease.base_version, 1, "租约基准是取回时的版本");
+    assert!(
+        lease.dest_rel.contains("工作副本"),
+        "租约要记住草稿落点：{}",
+        lease.dest_rel
+    );
+
+    let second_dest = dir.join("scratchpad").join("meta（第二份）.sql");
+    assert!(
+        service
+            .checkout(CheckoutRequest {
+                resource_id: first.resource_id.clone(),
+                dest_path: second_dest.clone(),
+            })
+            .await
+            .is_err(),
+        "同一资产已有 active 租约时必须拒绝第二次取回"
+    );
+    assert!(!second_dest.exists(), "失败取回不应留下工作副本");
+
+    // 只改元数据：内容字节不变，仍应产生 v2，并消费这条租约。
+    let mut changed_meta = meta.clone();
+    changed_meta.bookmarks.push(file_meta::Bookmark {
+        line: 2,
+        label: "第二处".to_string(),
+    });
+    let copy_meta = dir
+        .join(".RSmeta")
+        .join("scratchpad")
+        .join("meta")
+        .join("meta（工作副本）.sql.meta.json");
+    file_meta::write_meta_at(&copy_meta, &changed_meta).expect("write copy meta");
+
+    let mut rearchive = archive_req(&copy, "meta.sql", Some(&first.resource_id));
+    rearchive.binding.promoted_from = Some("scratchpad/meta（工作副本）.sql".to_string());
+    let second = service.archive(rearchive).await.expect("meta-only rearchive");
+    assert_eq!(second.version, 2, "元数据变化也产生新版本");
+    assert!(!copy.exists(), "再归档消费工作副本");
+    let v2 = service
+        .store()
+        .file_asset_version(&first.resource_id, 2)
+        .await
+        .expect("v2")
+        .expect("v2 row");
+    assert_ne!(v1.meta_hash, v2.meta_hash, "元数据 hash 应变化");
+    assert_eq!(v1.content_hash, v2.content_hash, "内容字节未变");
+    assert_eq!(v2.parent_version, Some(1));
+
+    let _ = fs::remove_dir_all(&dir).await;
+}
+
+#[tokio::test]
+async fn alive_display_name_is_unique_across_archive_and_rename() {
+    let (service, dir) = test_service().await;
+    let first_draft = write_draft(&dir, "first.sql", b"select 1;").await;
+    let second_draft = write_draft(&dir, "second.sql", b"select 2;").await;
+
+    let mut first = archive_req(&first_draft, "reports/first.sql", None);
+    first.name = "同名档案".to_string();
+    let archived = service.archive(first).await.expect("first archive");
+
+    let mut second = archive_req(&second_draft, "reports/second.sql", None);
+    second.name = "同名档案".to_string();
+    let error = service
+        .archive(second)
+        .await
+        .expect_err("同名首次归档必须被拒绝");
+    assert!(
+        error.to_string().contains("显示名"),
+        "拒绝理由要说明名字冲突，实际：{error}"
+    );
+    assert!(second_draft.exists(), "名字检查必须先于消费草稿，失败不能吃掉文件");
+
+    // 改名同样不能把两条存活资产变成同名。
+    let third_draft = write_draft(&dir, "third.sql", b"select 3;").await;
+    let mut third = archive_req(&third_draft, "reports/third.sql", None);
+    third.name = "另一个名字".to_string();
+    let other = service.archive(third).await.expect("third archive");
+    let rename_error = service
+        .store()
+        .rename_resource(&other.resource_id, "同名档案")
+        .await
+        .expect_err("改名撞已有显示名必须被拒绝");
+    assert!(
+        rename_error.to_string().contains("显示名"),
+        "改名拒绝理由要说明名字冲突，实际：{rename_error}"
+    );
+    assert_eq!(
+        service
+            .store()
+            .get_resource_by_id(&other.resource_id)
+            .await
+            .expect("row")
+            .name,
+        "另一个名字",
+        "失败的改名不能留下半截状态"
+    );
+    assert_eq!(
+        service
+            .store()
+            .alive_by_name("同名档案")
+            .await
+            .expect("by name")
+            .len(),
+        1,
+        "同名档案只应有一条存活行"
+    );
+    assert_eq!(archived.version, 1);
 
     let _ = fs::remove_dir_all(&dir).await;
 }

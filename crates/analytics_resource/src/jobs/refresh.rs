@@ -6,7 +6,11 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 /// 动作之后补一次取数（同一个 worker 里，见模块头注释）。
-pub(crate) fn refresh_after_op(rt: &tokio::runtime::Runtime, project_root: PathBuf, read_only: bool) {
+pub(crate) fn refresh_after_op(
+    rt: &tokio::runtime::Runtime,
+    project_root: PathBuf,
+    read_only: bool,
+) {
     let result = rt.block_on(run_refresh(&RefreshJob {
         project_root,
         read_only,
@@ -14,15 +18,19 @@ pub(crate) fn refresh_after_op(rt: &tokio::runtime::Runtime, project_root: PathB
     *lock(&jobs().result) = Some(result);
 }
 
-/// 开一条项目库连接并组装归档服务（工作线程上执行）。
-/// 打开项目库并装配归档服务。
+/// 打开项目库并装配归档服务（工作线程上执行）。
+pub(crate) async fn open_service(project_root: PathBuf) -> Result<ArchiveService, String> {
+    open_service_with_manager(project_root)
+        .await
+        .map(|(service, _)| service)
+}
+
+/// 与 [`open_service`] 相同，但把项目库管理器一并交给调用方。
 ///
-/// `keep_versions` 为 `None` 时用服务自带的默认（5 份）：**只有会裁剪的作业**才需要把
-/// 设置项传进来（归档 / 版本还原），其余作业拿默认值就够。
-pub(crate) async fn open_service(
+/// 版本对比要读项目分析库里的快照表，连接归管理器所有；管理器必须活到对比结束。
+pub(crate) async fn open_service_with_manager(
     project_root: PathBuf,
-    keep_versions: Option<KeepVersions>,
-) -> Result<ArchiveService, String> {
+) -> Result<(ArchiveService, ProjectDatabaseManager), String> {
     let manager = ProjectDatabaseManager::open(&project_root, SQLITE_POOL_SIZE)
         .await
         .map_err(|e| format!("打开项目库失败：{e}"))?;
@@ -32,11 +40,7 @@ pub(crate) async fn open_service(
     if let Err(error) = store.ensure_m6_tables().await {
         tracing::warn!(error = %error, "资产库扩展表自检未通过，语义写入可能失败");
     }
-    let service = ArchiveService::new(project_root, store);
-    Ok(match keep_versions {
-        Some(keep) => service.with_keep_versions(keep),
-        None => service,
-    })
+    Ok((ArchiveService::new(project_root, store), manager))
 }
 
 /// 业务时间窗是否明显过期：只认文本里出现的四位年份（如 `2026Q3` / `2026-01`）。
@@ -122,9 +126,15 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
     let payload = PayloadStore::new(job.project_root.clone());
 
     let rows = store
-        .list_file_archives()
+        .list_alive_resources()
         .await
         .map_err(|e| format!("读取存档列表失败：{e}"))?;
+    // 表资产没有 `file_rel_path`，必须和文件行一起进面板；按 id 身份返回，
+    // 不再按显示名去重（同名不同 id 的资产各自是一行）。
+    let table_versions = store.all_table_asset_versions().await.unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "读取表资产版本链失败，表版本区降级为空");
+        Default::default()
+    });
     // 先补齐上次「索引已提交、本体未替换」的暂存内容，再扫描——否则 scan 会把这种
     // 可自动恢复的状态误报成 `ContentChanged` 交给用户手工处理。
     replay_staging(&job.project_root, &rows).await;
@@ -140,22 +150,27 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         .recent_versions_by_resource(crate::present::DETAIL_RECENT_VERSIONS)
         .await
         .map_err(|e| format!("读取最近版本失败：{e}"))?;
-    // 副本清单：只为**有历史**的行问一次 `.RSmeta`（每资源一次目录列举，规模 = 面板行数）。
-    // 裁剪只删副本、不删版本行，详情要靠它说清“这一版还能不能还原”。
-    let version_copies = {
-        let mut copies: std::collections::HashMap<String, Vec<i32>> =
+    // 可还原版本清单：只为**有历史**的行查一次 manifest 索引（规模 = 面板行数）。
+    // 旧版副本已删除；详情靠它说清“这一版还能不能还原”。
+    let restorable_versions = {
+        let mut versions: std::collections::HashMap<String, Vec<i32>> =
             std::collections::HashMap::with_capacity(recent_versions.len());
         for id in recent_versions.keys() {
-            match payload.version_copies(id).await {
+            match store.list_file_asset_versions(id).await {
                 Ok(list) => {
-                    copies.insert(id.clone(), list);
+                    versions.insert(
+                        id.clone(),
+                        list.into_iter().map(|file| file.version).collect(),
+                    );
                 }
-                // 读不到就当成“没有副本”：详情会标“副本已裁剪”，与真实的缺失同一呈现，
+                // 读不到就当成“没有 manifest”：详情会标不可还原，与真实的缺失同一呈现，
                 // 但不会把整次刷新弄失败（版本区是附加信息）。
-                Err(error) => tracing::warn!(error = %error, resource_id = %id, "读取版本副本失败"),
+                Err(error) => {
+                    tracing::warn!(error = %error, resource_id = %id, "读取文件版本索引失败")
+                }
             }
         }
-        copies
+        versions
     };
     // 标签两件事都**一次查完**（与版本数同理）：按行的映射给详情 chips 与筛选维，
     // 词典给筛选菜单；两者都做成逐行查询就是 2N 次往返。
@@ -215,7 +230,13 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
 
     // 全局实例行（§13 展示层）+ 全局存档的使用面：全局登记读失败 / 全局库未初始化
     // 都不弄砸项目刷新（全局视图是附加信息，不是项目刷新能否成功的前提）。
-    let (global_rows, global_resources, dispatch_usage) = load_global_view().await;
+    let (
+        global_rows,
+        global_resources,
+        dispatch_usage,
+        global_table_versions,
+        global_file_versions,
+    ) = load_global_view().await;
 
     // 业务断言与效力：一次查完（与标签 / 分组同一纪律，避免详情区 N+1）。
     let assertions = store.all_assertions().await.unwrap_or_else(|error| {
@@ -226,7 +247,11 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
 
     // 主动校验：业务时间窗明显过期时留一条醒目履历。刷新是高频动作，
     // 所以由 store 用 NOT EXISTS 去重——不会每刷一次就往时间线刷一条重复告警。
-    let now_year = Utc::now().format("%Y").to_string().parse::<i32>().unwrap_or(0);
+    let now_year = Utc::now()
+        .format("%Y")
+        .to_string()
+        .parse::<i32>()
+        .unwrap_or(0);
     for (id, assertion) in &assertions {
         let Some(window) = assertion.time_window.as_deref() else {
             continue;
@@ -244,12 +269,15 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
             .map(|row| row.version)
             .unwrap_or(1);
         let detail = format!("业务时间窗「{window}」已过期，请确认结论是否仍适用");
-        if let Err(error) = store.record_validation_if_absent(id, version, &detail).await {
+        if let Err(error) = store
+            .record_validation_if_absent(id, version, &detail)
+            .await
+        {
             tracing::warn!(error = %error, resource_id = %id, "记录时间窗校验事件失败");
         }
     }
 
-    Ok(build_snapshot(SnapshotInputs {
+    let mut snapshot = build_snapshot(SnapshotInputs {
         assertions,
         lifecycles,
         resources: &rows,
@@ -258,16 +286,50 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         statuses: &statuses,
         history_counts: &history_counts,
         recent_versions: &recent_versions,
-        version_copies: &version_copies,
+        restorable_versions: &restorable_versions,
+        table_versions: &table_versions,
         tags: &tags_by_resource,
         tag_dictionary,
         folders: &folders_by_resource,
         group_dictionary,
         previews: &previews,
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &global_table_versions,
+        global_file_versions: &global_file_versions,
         read_only: job.read_only,
         now: Utc::now(),
-    }))
+    });
+
+    // 活跃取回：一次查完再回填详情，避免详情区逐行查租约。读失败只降级成“没有取回状态”，
+    // 不影响刷新本身（与标签 / 断言同一纪律）。
+    let leases = store.active_leases().await.unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "读取活跃取回租约失败，详情不显示取回状态");
+        Default::default()
+    });
+    for detail in snapshot.details.values_mut() {
+        if let Some(lease) = leases.get(&detail.id) {
+            detail.checkout_label = Some(checkout_label(detail.scope, lease));
+        }
+    }
+    Ok(snapshot)
+}
+
+/// 活跃取回 → 详情行文案。项目资产从本项目本体取回；全局行则标清“从全局取回”。
+fn checkout_label(
+    scope: crate::model::RowScope,
+    lease: &crate::store::file_asset::CheckoutLease,
+) -> String {
+    let prefix = match scope {
+        crate::model::RowScope::Global => "已从全局取回",
+        crate::model::RowScope::Project => "已取回",
+    };
+    // 草稿在草稿箱外时记的是绝对路径：直接报路径，别再冠「草稿箱/」误导人。
+    let dest = if std::path::Path::new(&lease.dest_rel).is_absolute() {
+        lease.dest_rel.clone()
+    } else {
+        format!("草稿箱/{}", lease.dest_rel.trim_start_matches(['/', '\\']))
+    };
+    format!("{prefix}：{dest}（基准 v{}）", lease.base_version)
 }
 
 /// 读全局视图（§13 展示层；工作线程上执行）：全局实例行 + 全局存档的使用面。
@@ -279,6 +341,8 @@ async fn load_global_view() -> (
     Vec<ArchiveRow>,
     Vec<AnalyticsResource>,
     std::collections::HashMap<String, crate::global::DispatchUsage>,
+    std::collections::HashMap<String, Vec<crate::store::table_asset::TableAssetVersion>>,
+    std::collections::HashMap<String, Vec<crate::store::file_asset::FileAssetVersion>>,
 ) {
     use crate::global::{GlobalInstanceStore, list_global_resources, to_global_rows};
     let Ok(store) = GlobalInstanceStore::production().await else {
@@ -295,7 +359,41 @@ async fn load_global_view() -> (
             Default::default()
         }
     };
-    (rows, resources, usage)
+    // 全局表 / 文件各自一套版本索引：一次按资产查完（规模 = 全局资产行数）。
+    // 读失败只让该行没有历史节点，不影响刷新。
+    let mut table_versions = std::collections::HashMap::new();
+    let mut file_versions = std::collections::HashMap::new();
+    for resource in &resources {
+        if ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref())
+            == ArchiveKind::AnalyticsTable
+        {
+            match store.global_table_versions(&resource.id) {
+                Ok(list) if !list.is_empty() => {
+                    table_versions.insert(resource.id.clone(), list);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(error = %error, asset_id = %resource.id, "读取全局表版本链失败");
+                }
+            }
+            continue;
+        }
+        match store.global_file_versions(&resource.name) {
+            Ok(list) if !list.is_empty() => {
+                file_versions.insert(resource.id.clone(), list);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    asset_id = %resource.id,
+                    name = %resource.name,
+                    "读取全局文件版本链失败"
+                );
+            }
+        }
+    }
+    (rows, resources, usage, table_versions, file_versions)
 }
 
 /// 读内容预览（工作线程上执行）：只给可预览的行读开头。
@@ -308,8 +406,7 @@ async fn load_previews(payload: &PayloadStore, rows: &[AnalyticsResource]) -> Pr
     for row in rows {
         // 表型 / 引用档没有 `resources/` 下的本体文件；带结构指纹的行沿用原口径
         // （只给元信息、不读文本预览）——种类收成两档后这两件事得分开判。
-        if ArchiveKind::resolve(&row.kind, row.analytics_table.as_deref())
-            != ArchiveKind::File
+        if ArchiveKind::resolve(&row.kind, row.analytics_table.as_deref()) != ArchiveKind::File
             || row.definition_sql.is_some()
         {
             continue;
@@ -370,6 +467,124 @@ pub(crate) fn free_dest(dest: &Path) -> PathBuf {
     dest.to_path_buf()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{
+        ArchiveBinding, ArchiveKind, NewArchiveInput, PayloadMode,
+    };
+    use crate::service::table_asset::ArchiveTableRequest;
+
+    async fn exec(manager: &ProjectDatabaseManager, sql: &str) {
+        let duckdb = manager.duckdb_conn().expect("write handle");
+        let handle = duckdb.acquire().await.expect("acquire");
+        let guard = handle.lock().await;
+        guard
+            .as_ref()
+            .expect("conn")
+            .execute_batch(sql)
+            .expect("exec");
+    }
+
+    fn file_input(name: &str, rel_path: &str) -> NewArchiveInput {
+        NewArchiveInput {
+            resource_type: "file".to_string(),
+            name: name.to_string(),
+            alias: None,
+            kind: ArchiveKind::File,
+            content_hash: "file-hash".to_string(),
+            definition_sql: None,
+            row_count: None,
+            column_count: None,
+            file_rel_path: rel_path.to_string(),
+            payload_mode: PayloadMode::Copy,
+            source_path: Some(rel_path.to_string()),
+            file_size: Some(12),
+            structured: false,
+            binding: ArchiveBinding::default(),
+            scope: "project".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_keeps_file_and_table_assets_and_loads_table_history() {
+        let dir = crate::tests::temp_project_dir("refresh_all_assets");
+        let manager = ProjectDatabaseManager::open(&dir, SQLITE_POOL_SIZE)
+            .await
+            .expect("open project");
+        exec(&manager, "CREATE TABLE main.orders_v1 AS SELECT 1 AS id;").await;
+        exec(&manager, "CREATE TABLE main.orders_v2 AS SELECT 1 AS id UNION ALL SELECT 2;")
+            .await;
+        let store = AnalyticsResourceStore::new(manager.sqlite_pool());
+        let file = store
+            .insert_archive(file_input("留存文件", "resources/keep.txt"))
+            .await
+            .expect("insert file");
+        drop(store);
+        drop(manager);
+
+        let first = crate::service::table_asset::archive_table_at(
+            &dir,
+            &ArchiveTableRequest {
+                name: "订单快照".to_string(),
+                source_schema: "main".to_string(),
+                source_table: "orders_v1".to_string(),
+                asset_id: None,
+                consume_source: true,
+            },
+        )
+        .await
+        .expect("archive table v1");
+        crate::service::table_asset::archive_table_at(
+            &dir,
+            &ArchiveTableRequest {
+                name: "订单快照".to_string(),
+                source_schema: "main".to_string(),
+                source_table: "orders_v2".to_string(),
+                asset_id: Some(first.resource_id.clone()),
+                consume_source: true,
+            },
+        )
+        .await
+        .expect("archive table v2");
+
+        let snapshot = run_refresh(&RefreshJob {
+            project_root: dir.clone(),
+            read_only: false,
+        })
+        .await
+        .expect("refresh");
+
+        let file_row = snapshot
+            .rows
+            .iter()
+            .find(|row| row.id == file.id)
+            .expect("文件行必须进面板");
+        assert_eq!(file_row.kind, ArchiveKind::File);
+        let table_row = snapshot
+            .rows
+            .iter()
+            .find(|row| row.id == first.resource_id)
+            .expect("表行必须进面板");
+        assert_eq!(table_row.kind, ArchiveKind::AnalyticsTable);
+
+        let table_detail = snapshot
+            .details
+            .get(&first.resource_id)
+            .expect("表资产详情");
+        assert_eq!(table_detail.version_timeline.len(), 2, "v1+v2 都要进时间线");
+        assert!(
+            table_detail.history_label.contains("1 个历史版本"),
+            "详情历史数必须来自表版本链，实际：{}",
+            table_detail.history_label
+        );
+
+        // 不在这里删项目目录：DuckDB 根连接是进程级的，删掉仍在挂载的库会连累
+        // 同一进程里并行跑的其他表资产测试（WAL 打不开）。留待 `temp_project_dir`
+        // 的 1 小时过期清理收尾。
+    }
+}
+
 /// 提交一次刷新（**事件路径**调用：激活面板 / 打开或切换项目 / 归档等变更之后）。
 pub fn enqueue_refresh(project_root: PathBuf, read_only: bool) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
@@ -418,7 +633,6 @@ pub fn drain_trash_rows() -> Option<Result<TrashDialogSeed, String>> {
 pub fn drain_index_scan() -> Option<Result<IndexScanRows, String>> {
     lock(&jobs().index_scan).take()
 }
-
 
 #[cfg(test)]
 mod validation_tests {

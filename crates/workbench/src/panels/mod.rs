@@ -41,10 +41,10 @@ use scratchpad::ScratchpadView;
 // 前导 `::`：本模块另有一个 `mod editor;`（面板子模块），不能靠名字消歧。
 use ::editor::shared::EditorShared;
 
-mod editor;
 mod config_center;
-mod data_objects_tab;
 mod dashboard;
+mod data_objects_tab;
+mod editor;
 mod left_tabs;
 mod metadata_search;
 /// 工作台 tab 顶部的「业务数据概览」卡片（数据：`services::overview`）
@@ -59,12 +59,12 @@ mod search_results;
 mod shared;
 
 // 对外路径保持 `crate::panels::X` 不变：组件层、宿主与集成测试零改动。
-pub use database::model::PropertyRequest;
-pub use data_objects_tab::DataObjectsTab;
+pub use config_center::{ConfigCenterPanel, focus_config_center_tab};
 pub use dashboard::{DashboardPanel, focus_dashboard_tab};
+pub use data_objects_tab::DataObjectsTab;
+pub use database::model::PropertyRequest;
 pub use editor::EditorPanel;
 pub use left_tabs::{DatabaseNavPanel, PluginPanel, ResourcePanelTab, ScratchPanel};
-pub use config_center::{ConfigCenterPanel, focus_config_center_tab};
 pub use metadata_search::{MetadataSearchHostPanel, focus_metadata_search_tab};
 pub use plugin_manager::{PluginManagerPanel, focus_plugin_manager_tab};
 pub use project_picker::ProjectPickerPanel;
@@ -189,7 +189,8 @@ impl SidebarPanel {
         };
         let read_only = self.shared.project_ui.borrow().read_only;
         let state = VersionDialogState::new();
-        state.set_read_only(read_only);
+        state.set_read_only(read_only || rows.global);
+        state.set_global_scope(rows.global);
         state.set_rows(rows.seed.rows.clone());
 
         let resource_id = rows.resource_id.clone();
@@ -199,6 +200,7 @@ impl SidebarPanel {
             flow.session = Some(shared::VersionDialogSession {
                 resource_id: resource_id.clone(),
                 state: state.clone(),
+                global: rows.global,
             });
         }
 
@@ -425,6 +427,60 @@ impl SidebarPanel {
         );
     }
 
+    /// 消费「发布基准过期」回执：只能给父 head 分叉出新资产，或取消。
+    pub(crate) fn ensure_stale_publish_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(recovery) = self.shared.stale_publish_dialog.borrow_mut().pending.take() else {
+            return;
+        };
+        let parent_name = recovery.request.name.clone();
+        let seed = analytics_resource::dialogs::stale_base::StaleBaseSeed {
+            name: parent_name.clone(),
+            base: recovery.base,
+            head: recovery.head,
+        };
+        let fork_name = format!("{parent_name}-分支");
+        let name_input = cx.new(|cx| {
+            let mut state = gpui_kit::component::input::InputState::new(window, cx);
+            state.set_value(fork_name.clone(), window, cx);
+            state
+        });
+
+        let entity = cx.entity();
+        let parent_version = recovery.head;
+        analytics_resource::dialogs::stale_base::open_stale_base_dialog(
+            window,
+            cx,
+            seed,
+            name_input,
+            move |fork_name, _window, cx| {
+                entity.update(cx, |this, cx| {
+                    let Some(root) = this.shared.project_root() else {
+                        this.shared
+                            .say_error("资产库：还没有打开项目，无法分叉".to_string(), cx);
+                        return;
+                    };
+                    crate::services::resource_jobs::enqueue_fork_global_table_asset(
+                        root,
+                        parent_name.clone(),
+                        parent_version,
+                        fork_name.clone(),
+                    );
+                    this.shared.say(
+                        format!("资产库：正在把「{parent_name}」分叉为「{fork_name}」…"),
+                        cx,
+                    );
+                    this.shared.refresh_resources(cx);
+                    this.shared.notify_host(cx);
+                });
+            },
+            move |_cx| {},
+        );
+    }
+
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
         div()
             .v_flex()
@@ -473,6 +529,7 @@ impl Render for SidebarPanel {
         self.ensure_trash_dialog(window, cx);
         self.ensure_tag_dialog(window, cx);
         self.ensure_conflict_dialog(window, cx);
+        self.ensure_stale_publish_dialog(window, cx);
         // 「在导航树中定位」（Quick Open 的 ⌥↵）在这一帧被消费：render 是权威同步点，
         // 不在事件路径上碰面板状态。发起侧已把左 Dock 切到数据源；这里不再判断面板是否在前台，
         // 因为请求一旦落在这里就应当被完成（漏掉就会「点了没反应」）。

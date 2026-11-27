@@ -102,3 +102,17 @@ pub fn get_global_metadata_dir() -> Result<PathBuf, CoreError> {
 
     Ok(metadata_dir)
 }
+
+/// 全局资产回收站根：`<RDS_HOME>/data/trash/global`
+///
+/// 与项目 `.RSmeta/trash/` 同一套应用语义、两个后端；不调用 Windows 回收站。
+pub fn get_global_trash_dir() -> Result<PathBuf, CoreError> {
+    let dir = get_global_data_dir()?.join("trash").join("global");
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "Failed to create global trash directory: {}",
+            e
+        )))
+    })?;
+    Ok(dir)
+}

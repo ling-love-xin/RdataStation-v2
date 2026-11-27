@@ -9,14 +9,8 @@ pub(crate) use tokio::fs;
 // 项目库建表 SQL 统一从 `crate::store::schema_sql` 取：此前这里手抄了一份迁移清单，
 // 加一个迁移要改六处（漏一处只在某个用例里以 no such column 冒出来），见该模块注释。
 
-/// 测试服务：默认给「保留 n 份」（大多数用例只关心份数）。
-///
-/// 需要全留 / 只留元数据这类策略的用例走 [`test_service_with`]。
-pub(super) async fn test_service(keep_versions: u32) -> (ArchiveService, PathBuf) {
-    test_service_with(KeepVersions::Keep(keep_versions)).await
-}
-
-pub(super) async fn test_service_with(keep_versions: KeepVersions) -> (ArchiveService, PathBuf) {
+/// 测试服务：独立临时项目 + 空索引库。
+pub(super) async fn test_service() -> (ArchiveService, PathBuf) {
     let dir = crate::tests::temp_project_dir("archive");
     let pool = Arc::new(
         ProjectSqlitePool::new(dir.join("project.db"), 2)
@@ -32,17 +26,19 @@ pub(super) async fn test_service_with(keep_versions: KeepVersions) -> (ArchiveSe
     }
     // 全局标签库注入本测试独立路径（避免共享进程级隔离根 → 跨测试同名标签冲突）。
     let store = AnalyticsResourceStore::new_for_test(pool, dir.join("global.db"));
-    (
-        ArchiveService::new(&dir, store).with_keep_versions(keep_versions),
-        dir,
-    )
+    (ArchiveService::new(&dir, store), dir)
 }
 
 pub(super) fn archive_req(source: &std::path::Path, rel: &str, existing: Option<&str>) -> ArchiveRequest {
     ArchiveRequest {
         source_path: source.to_path_buf(),
         rel_path: rel.to_string(),
-        name: "dau_report".to_string(),
+        // 渲染测试与 UI 一致：默认显示名取文件名（存活资产同名会被拒，测试不能全叫一个名字）。
+        name: std::path::Path::new(rel)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("dau_report")
+            .to_string(),
         alias: None,
         kind: ArchiveKind::File,
         // 大多数服务用例是文件型归档；分析表那条路见 `archive_analysis_req`。
@@ -55,7 +51,6 @@ pub(super) fn archive_req(source: &std::path::Path, rel: &str, existing: Option<
         },
         tags: Vec::new(),
         group_id: None,
-        keep_versions: None,
         existing_resource_id: existing.map(str::to_string),
     }
 }

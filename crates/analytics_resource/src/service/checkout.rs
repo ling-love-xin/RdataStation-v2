@@ -4,6 +4,14 @@ use super::*;
 use crate::model::*;
 
 impl ArchiveService {
+    /// 草稿落点：相对草稿箱记短路径；落到草稿箱外就记绝对路径，别伪装成草稿箱条目。
+    fn checkout_dest_rel(&self, dest: &std::path::Path) -> String {
+        match dest.strip_prefix(self.payload.scratchpad_dir()) {
+            Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+            Err(_) => dest.to_string_lossy().into_owned(),
+        }
+    }
+
     /// 取回（检出）：把本体复制成可写工作副本，本体不动。
     pub async fn checkout(&self, req: CheckoutRequest) -> Result<CheckoutOutcome, CoreError> {
         // 目标不得落在 resources/ 内：那等于绕开只读守卫写本体。
@@ -20,17 +28,56 @@ impl ArchiveService {
             .clone()
             .ok_or_else(|| service_err("checkout", "该存档没有本体（非文件型或旧行）"))?;
 
-        match PayloadMode::from_db_str(&resource.payload_mode) {
-            // copy：从 `resources/` 副本复制（本体不动、仍只读）。
-            PayloadMode::Copy => self.payload.copy_out(&rel_path, &req.dest_path).await?,
-            // reference：从源绝对路径复制（本体在源位置，M6 不动它）。
-            PayloadMode::Reference => {
-                let source = self.payload_path_for(&resource)?;
-                self.payload
-                    .copy_out_source(&source, &req.dest_path)
-                    .await?;
+        // 文件资产优先按 manifest 物化：内容和 FileMeta 一起从 CAS 恢复；
+        // 旧资产没有 manifest 时退回原来的 copy_out，元数据为 None。
+        let file_meta = if let Some(version) = self
+            .store
+            .file_asset_version(&resource.id, resource.version)
+            .await?
+        {
+            let manifest = self
+                .payload
+                .cas()
+                .read_manifest(&version.manifest_id)
+                .await?;
+            self.payload
+                .cas()
+                .materialize_content(&manifest, &req.dest_path)
+                .await?
+        } else {
+            match PayloadMode::from_db_str(&resource.payload_mode) {
+                // copy：从 `resources/` 副本复制（本体不动、仍只读）。
+                PayloadMode::Copy => self.payload.copy_out(&rel_path, &req.dest_path).await?,
+                // reference：从源绝对路径复制（本体在源位置，M6 不动它）。
+                PayloadMode::Reference => {
+                    let source = self.payload_path_for(&resource)?;
+                    self.payload
+                        .copy_out_source(&source, &req.dest_path)
+                        .await?;
+                }
             }
+            None
+        };
+
+        // 取回是带 base_version 的租约，不是 OS 锁；同一资产同一 scope 只允许一条 active。
+        // `dest_rel` 记草稿落点（相对草稿箱），不是资产本体路径：详情 / 再归档都靠它找草稿。
+        let draft_rel = self.checkout_dest_rel(&req.dest_path);
+        if let Err(error) = self
+            .store
+            .create_lease(&resource.id, "project", resource.version, &draft_rel)
+            .await
+        {
+            // 工作副本没有租约就再归档无法校验 base：宁可删掉刚落的副本。
+            if let Err(cleanup) = tokio::fs::remove_file(&req.dest_path).await {
+                tracing::warn!(
+                    error = %cleanup,
+                    path = %req.dest_path.display(),
+                    "取回失败后清理工作副本失败"
+                );
+            }
+            return Err(error);
         }
+
         self.emit(ChangeReason::CheckedOut, Some(resource.id.clone()));
         self.record_timeline(
             &resource.id,
@@ -45,6 +92,7 @@ impl ArchiveService {
             resource_id: resource.id,
             version: resource.version,
             dest_path: req.dest_path,
+            file_meta,
         })
     }
 
@@ -64,12 +112,25 @@ impl ArchiveService {
         if current.deleted_at.is_some() {
             return Err(service_err("restore", "存档已删除，无法还原"));
         }
-        // 表型资产走另一条还原：本体是项目分析库里的一张表，**没有副本文件**，
-        // 回退 = 把表名指回旧版本那张表（两张表都还在，不搬数据、不删新表）。
+        // 表型资产走快照闭环：恢复 = 新生成一版指向旧快照，零复制、不改写历史。
         if crate::ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref())
             == crate::ArchiveKind::AnalyticsTable
         {
-            return self.restore_table_version(&current, version).await;
+            let outcome = crate::service::table_asset::restore_table_asset_version(
+                &self.store,
+                &current.id,
+                version,
+            )
+            .await?;
+            self.emit(ChangeReason::Restored, Some(outcome.resource_id.clone()));
+            return Ok(ArchiveOutcome {
+                resource_id: outcome.resource_id,
+                version: outcome.version,
+                content_hash: outcome.manifest_id,
+                file_rel_path: String::new(),
+                created_new_version: outcome.created_new_version,
+                notes: Vec::new(),
+            });
         }
         // reference 模式的本体在源位置，不归 M6 管辖——"还原为旧版本"意味着覆盖源文件，
         // 那可能正是用户工作区里在用的活文件，风险不可控；M6 定位"留存 + 版本"不做覆盖外部源。
@@ -85,21 +146,35 @@ impl ArchiveService {
             .clone()
             .ok_or_else(|| service_err("restore", "该存档没有本体路径（非文件型或旧行）"))?;
 
-        let copy = self
-            .payload
-            .version_copy_file(resource_id, version)
-            .await?
-            .ok_or_else(|| {
-                service_err(
-                    "restore",
-                    &format!("v{version} 没有内容副本（可能已被保留策略裁剪），无法还原"),
-                )
-            })?;
-        let copy_hash = self.payload.content_hash(&copy).await?;
-        // 还原后的体积就是副本的体积（写回后本体与副本同内容）。
-        let file_size = self.payload.file_size(&copy).await?;
-        if copy_hash == current.content_hash.clone().unwrap_or_default() {
-            // 幂等：要还原的内容就是当前内容，什么都不做（与再归档的指纹守卫同一口径）。
+        let target = self.store.file_asset_version(resource_id, version).await?.ok_or_else(|| {
+            service_err(
+                "restore",
+                &format!("v{version} 没有 manifest：旧文件资产不再支持版本还原"),
+            )
+        })?;
+        if target.content_pruned {
+            return Err(service_err(
+                "restore",
+                &format!("v{version} 的内容已被标记裁剪，无法还原"),
+            ));
+        }
+        let manifest = self.payload.cas().read_manifest(&target.manifest_id).await?;
+        let entry = manifest.content_entry().ok_or_else(|| {
+            service_err("restore", &format!("v{version} 的 manifest 缺少 Content"))
+        })?;
+        let copy_hash = manifest.content_hash.clone();
+        let file_size = Some(entry.size as i64);
+        // 幂等按**整版 manifest** 比，而不是只比字节：内容相同、元数据不同也是另一版。
+        let current_manifest = self
+            .store
+            .file_asset_version(&current.id, current.version)
+            .await?;
+        let unchanged = match current_manifest.as_ref() {
+            Some(current) => current.manifest_id == target.manifest_id,
+            None => copy_hash == current.content_hash.clone().unwrap_or_default(),
+        };
+        if unchanged {
+            // 幂等：要还原的就是当前这一版完整快照，什么都不做。
             return Ok(ArchiveOutcome {
                 resource_id: current.id,
                 version: current.version,
@@ -110,40 +185,44 @@ impl ArchiveService {
             });
         }
 
-        // 与再归档同一顺序（P0-1）：旧内容留副本 → 历史副本进暂存 → 索引事务 → 替换本体。
-        if self
-            .payload
-            .store_version_copy(resource_id, current.version, &rel_path)
-            .await?
-            .is_none()
-        {
-            return Err(service_err(
-                "restore",
-                "当前内容未能留成历史副本，已中止还原以免丢失当前版本",
-            ));
-        }
         let snapshot = serde_json::to_string(&current).map_err(|e| {
             CoreError::storage(StorageError::Serialization {
                 format: "JSON".to_string(),
                 reason: e.to_string(),
             })
         })?;
-        // `stage_payload` 会重新检查副本是否还在：等价于原来「副本在查到与写回之间消失」的守卫。
-        let staged = self.payload.stage_payload(&copy, &rel_path).await?;
+        let temp = self.payload.project_root().join(".RSmeta/cas/staging").join(format!(
+            "restore-{}.tmp",
+            uuid::Uuid::new_v4().simple()
+        ));
+        self.payload
+            .cas()
+            .materialize_content(&manifest, &temp)
+            .await?;
+        let staged = self.payload.stage_payload(&temp, &rel_path).await;
+        if let Err(error) = tokio::fs::remove_file(&temp).await {
+            tracing::warn!(error = %error, path = %temp.display(), "清理还原临时物化文件失败");
+        }
+        let staged = staged?;
 
         let committed = self
             .store
             // 版本还原：只换内容与体积；分析表的定义 / 规模保持原位不动
             // （还原旧内容不等于把「这份东西是什么」改回去——那要走再归档）。
-            .commit_new_version(
+            .commit_new_file_version(
                 resource_id,
                 current.version,
                 &snapshot,
-                &copy_hash,
+                crate::store::file_asset::NewFileAssetVersion {
+                    manifest_id: target.manifest_id.clone(),
+                    content_hash: target.content_hash.clone(),
+                    meta_hash: target.meta_hash.clone(),
+                    parent_version: Some(current.version),
+                },
                 file_size,
                 None,
                 crate::model::TimelineEventKind::Restored,
-                Some(&format!("从 v{version} 的副本生成新版本")),
+                Some(&format!("从 v{version} 的 manifest 生成新版本")),
             )
             .await;
         let updated = match committed {
@@ -173,7 +252,6 @@ impl ArchiveService {
         }
         self.payload.discard_staged(&staged).await;
 
-        self.prune_copies(resource_id, None).await;
         self.emit(ChangeReason::Restored, Some(resource_id.to_string()));
 
         Ok(ArchiveOutcome {
@@ -187,67 +265,52 @@ impl ArchiveService {
         })
     }
 
-    /// 表型资产的还原：把本体表名指回快照里那张旧表，生成新版本（历史不动）。
+    /// 把某个历史版本的 manifest 物化到项目内部只读预览路径。
     ///
-    /// 与文件型还原的区别只有一点：**不碰任何数据**。旧表还在项目库里，回退只改
-    /// 登记行的指向；当前版本那张表也原样留着（所以"回退"之后还能再回退回去）。
-    async fn restore_table_version(
+    /// 只给「用 vN 分析」这类只读查看用：返回 `None` = 该版本没有 manifest。
+    /// 落点是确定的（同一版本重复查看覆盖同一文件），不占用用户可见目录。
+    pub async fn version_file(
         &self,
-        current: &AnalyticsResource,
+        resource_id: &str,
         version: i32,
-    ) -> Result<ArchiveOutcome, CoreError> {
-        let versions = self.store.get_resource_versions(&current.id).await?;
-        let snapshot = versions
-            .iter()
-            .find(|row| row.version == version)
-            .ok_or_else(|| service_err("restore", &format!("找不到 v{version} 的版本快照")))?;
-        let target = crate::table_asset::snapshot_table(&snapshot.snapshot).ok_or_else(|| {
-            service_err(
-                "restore",
-                &format!("v{version} 的快照里没有本体表名，无法回退"),
-            )
-        })?;
-        let hash = crate::table_asset::table_fingerprint(&target);
-        // 幂等：要回退到的就是当前指的那张表，什么都不做（与文件型的指纹守卫同一口径）。
-        if current.analytics_table.as_deref() == Some(target.as_str()) {
-            return Ok(ArchiveOutcome {
-                resource_id: current.id.clone(),
-                version: current.version,
-                content_hash: current.content_hash.clone().unwrap_or_default(),
-                file_rel_path: String::new(),
-                created_new_version: false,
-                notes: Vec::new(),
-            });
+    ) -> Result<Option<std::path::PathBuf>, CoreError> {
+        let Some(target) = self.store.file_asset_version(resource_id, version).await? else {
+            return Ok(None);
+        };
+        if target.content_pruned {
+            return Err(service_err(
+                "version_file",
+                &format!("v{version} 的内容已被标记裁剪，无法查看"),
+            ));
         }
-        let snapshot_of_current = serde_json::to_string(current).map_err(|e| {
-            CoreError::storage(StorageError::Serialization {
-                format: "JSON".to_string(),
-                reason: e.to_string(),
-            })
+        let manifest = self.payload.cas().read_manifest(&target.manifest_id).await?;
+        let entry = manifest.content_entry().ok_or_else(|| {
+            service_err("version_file", "manifest 缺少 Content")
         })?;
-        let detail = format!("回退到 v{version} 的表 {target}");
-        let updated = self
-            .store
-            .append_table_version(
-                &current.id,
-                current.version,
-                &target,
-                &snapshot_of_current,
-                &hash,
-                crate::model::TimelineEventKind::Restored,
-                Some(&detail),
-            )
+        let name = std::path::Path::new(&entry.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("version.dat");
+        let dest = self
+            .payload
+            .project_root()
+            .join(".RSmeta/cas/materialized/versions")
+            .join(resource_id)
+            .join(format!("v{version}"))
+            .join(name);
+        if dest.exists() {
+            tokio::fs::remove_file(&dest).await.map_err(|error| {
+                service_err(
+                    "version_file",
+                    &format!("清理旧预览失败（{}）：{error}", dest.display()),
+                )
+            })?;
+        }
+        self.payload
+            .cas()
+            .materialize_content(&manifest, &dest)
             .await?;
-        // 清单 / 详情面板靠这条广播刷新（与文件型还原同一个理由）。
-        self.emit(ChangeReason::Restored, Some(updated.id.clone()));
-        Ok(ArchiveOutcome {
-            resource_id: updated.id,
-            version: updated.version,
-            content_hash: hash,
-            file_rel_path: String::new(),
-            created_new_version: true,
-            notes: Vec::new(),
-        })
+        Ok(Some(dest))
     }
 
     /// 取回某个**历史版本**为工作副本（版本历史对话框的“取回该版本为草稿”）。
@@ -266,17 +329,24 @@ impl ArchiveService {
             ));
         }
         let resource = self.store.get_resource_by_id(resource_id).await?;
-        // 本体异常（缺失 / 内容已变）不影响历史副本：能从历史取回就让它取。
-        if !self
-            .payload
-            .copy_version_out(resource_id, version, dest_path)
-            .await?
-        {
+        let target = self.store.file_asset_version(resource_id, version).await?.ok_or_else(|| {
+            service_err(
+                "checkout_version",
+                &format!("v{version} 没有 manifest：旧文件资产不再支持历史取回"),
+            )
+        })?;
+        if target.content_pruned {
             return Err(service_err(
                 "checkout_version",
-                &format!("v{version} 没有内容副本（可能已被保留策略裁剪），无法取回"),
+                &format!("v{version} 的内容已被标记裁剪，无法取回"),
             ));
         }
+        let manifest = self.payload.cas().read_manifest(&target.manifest_id).await?;
+        let file_meta = self
+            .payload
+            .cas()
+            .materialize_content(&manifest, dest_path)
+            .await?;
         self.emit(ChangeReason::CheckedOut, Some(resource.id.clone()));
         self.record_timeline(
             &resource.id,
@@ -291,6 +361,7 @@ impl ArchiveService {
             resource_id: resource.id,
             version,
             dest_path: dest_path.to_path_buf(),
+            file_meta,
         })
     }
 

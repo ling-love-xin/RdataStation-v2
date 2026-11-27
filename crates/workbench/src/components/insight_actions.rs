@@ -14,7 +14,7 @@ use gpui_kit::{App, Context, Entity, Subscription, Window};
 use gpui_kit::component::WindowExt as _;
 
 use analytics_resource::model::{
-    ArchiveBinding, ArchiveKind, ArchiveRequest, KeepVersions, PayloadMode,
+    ArchiveBinding, ArchiveKind, ArchiveRequest, PayloadMode,
 };
 use insight::insight_view::InsightView;
 use insight::{InsightEvent, InsightService, SampleSource, SchemaExportFormat};
@@ -206,8 +206,6 @@ fn archive_from_insight(shared: &Shared, panel: &Entity<InsightView>, key: &str,
     };
 
     let shared2 = shared.clone();
-    // 保留策略在主线程读好随闭包带入：async 里拿不到 GPUI global 设置
-    let keep_versions = KeepVersions::from_setting(settings::SettingsService::keep_versions(cx));
     cx.spawn(async move |cx| {
         let (path, name) = match InsightService::export_table_snapshot(&root, &temp_table, &label) {
             Ok(export) => export,
@@ -237,10 +235,8 @@ fn archive_from_insight(shared: &Shared, panel: &Entity<InsightView>, key: &str,
                 },
                 tags: vec!["洞察".to_string()],
                 group_id: None,
-                keep_versions: None,
                 existing_resource_id: None,
             },
-            keep_versions,
             false,
             // 洞察快照自动带出业务断言：源表名 + 画像口径 + 生成月份，
             // 免得归档后再补口径（这一步正是「数字资产积累」最容易漏的上下文）。

@@ -17,7 +17,6 @@ use std::time::Duration;
 use gpui_kit::base::StyledExt;
 use gpui_kit::*;
 
-use analytics_resource::KeepVersions;
 use analytics_resource::dialogs::conflict::ConflictChoice;
 use analytics_resource::dialogs::index_repair::RepairAction;
 use analytics_resource::dialogs::tag::TagDialogEvent;
@@ -100,8 +99,8 @@ impl SidebarPanel {
         };
         // 对比是**只读查看**：不拒只读（只读项目也能看差异）、不入动作回执，
         // 直接走独立 diff 取数 job（读两版文本 + 生成 unified patch → 开 diff 对话框）。
-        if let VersionAction::Diff { version } = action {
-            resource_jobs::enqueue_version_diff(root, resource_id.to_string(), version);
+        if let VersionAction::Diff { version, against } = action {
+            resource_jobs::enqueue_version_diff(root, resource_id.to_string(), version, against);
             self.ensure_resources_pump(cx);
             return;
         }
@@ -109,7 +108,11 @@ impl SidebarPanel {
         // 所以同样不拒只读、不入动作回执、不开忙态。
         if let VersionAction::Analyze { version } = action {
             crate::components::data_objects_load::analyze_asset_version(
-                &self.shared, resource_id, name, version, cx,
+                &self.shared,
+                resource_id,
+                name,
+                version,
+                cx,
             );
             return;
         }
@@ -131,8 +134,6 @@ impl SidebarPanel {
             resource_id.to_string(),
             name.to_string(),
             action,
-            // 还原会把当前内容留成副本，之后按设置裁剪；保留策略在主线程读好。
-            KeepVersions::from_setting(settings::SettingsService::keep_versions(cx)),
         );
         self.ensure_resources_pump(cx);
     }
@@ -411,10 +412,17 @@ impl SidebarPanel {
         // 无论成败都要收掉"加载中"：失败时停在加载态比给出提示更糟（用户会一直等）。
         panel.update(cx, |panel, cx| panel.set_loading(false, cx));
         match result {
-            Ok(snapshot) => panel.update(cx, |panel, cx| {
-                panel.set_notice(None, cx);
-                panel.set_snapshot(snapshot, cx);
-            }),
+            Ok(snapshot) => {
+                panel.update(cx, |panel, cx| {
+                    panel.set_notice(None, cx);
+                    panel.set_snapshot(snapshot, cx);
+                });
+                // 资产是数据对象清单的一段：新快照落地后声明清单过期，
+                // 否则归档回执里先刷的数据对象面板会一直停在旧快照（表资产不可见）。
+                self.shared
+                    .data_objects_epoch
+                    .set(self.shared.data_objects_epoch.get().wrapping_add(1));
+            }
             Err(err) => panel.update(cx, |panel, cx| panel.set_notice(Some(err), cx)),
         }
     }
@@ -600,6 +608,27 @@ impl SidebarPanel {
         let panel = self.resources_panel.clone();
         panel.update(cx, |panel, cx| panel.set_undo(undo, cx));
 
+        // 发布基准过期：不写失败回执，凭据落 `pending`，下一帧开「分叉 / 取消」对话框。
+        if let resource_jobs::OpOutcome::StaleBase {
+            request,
+            name,
+            base,
+            head,
+        } = &outcome
+        {
+            self.shared.stale_publish_dialog.borrow_mut().pending =
+                Some(crate::panels::shared::StalePublishRecovery {
+                    request: request.clone(),
+                    base: *base,
+                    head: *head,
+                });
+            self.shared.say(
+                format!("资产库：「{name}」发布基准已过期（全局 v{head}），请选择分叉或取消"),
+                cx,
+            );
+            return;
+        }
+
         // 同名冲突：不写失败回执，把凭据落 `pending`，下一帧由 `ensure_conflict_dialog`
         // 开三选对话框（覆盖 / 改名 / 取消；§13.3、§13.6）。
         if let resource_jobs::OpOutcome::Conflict {
@@ -643,6 +672,23 @@ impl SidebarPanel {
                     format!("{base}（{}）", notes.join("；"))
                 }
             }
+            resource_jobs::OpOutcome::GlobalCheckedOut {
+                name,
+                dest,
+                version,
+                open_after,
+            } => {
+                let shown = self
+                    .shared
+                    .project_root()
+                    .and_then(|root| dest.strip_prefix(&root).ok().map(|rel| rel.to_path_buf()))
+                    .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|| dest.to_string_lossy().to_string());
+                if open_after {
+                    self.shared.request_open_in_editor(dest);
+                }
+                format!("资产库：已从全局取回「{name}」v{version} → {shown}；改完归档为本项目资产")
+            }
             resource_jobs::OpOutcome::CheckedOut {
                 dest,
                 version,
@@ -672,7 +718,7 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::AliasDone { note } => format!("资产库：{note}"),
             // 回收站是项目级的：回执里把“去哪儿找回来”说清，比只说“已移入”有用。
             resource_jobs::OpOutcome::Trashed { names } => match names.as_slice() {
-                [only] => format!("资产库：已把「{only}」移入回收站（面板头「⋯ → 回收站…」）"),
+                [only] => format!("资产库：已把「{only}」移入回收站（草稿箱栏）"),
                 many => format!("资产库：已把 {} 项移入回收站", many.len()),
             },
             resource_jobs::OpOutcome::VersionActionDone { note } => format!("资产库：{note}"),
@@ -708,20 +754,36 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::Solidified { name, version } => {
                 format!("资产库：已固化引用版本为本地资产「{name}」v{version}")
             }
+            resource_jobs::OpOutcome::GlobalTrashed { name, version } => format!(
+                "资产库：已把全局「{name}」v{version} 移入回收站（表与版本快照保留，恢复后回到列表）"
+            ),
+            resource_jobs::OpOutcome::GlobalVersionRestored {
+                name,
+                from_version,
+                version,
+            } => {
+                format!("资产库：已从全局「{name}」v{from_version} 恢复为 v{version}（旧版本保留）")
+            }
+            resource_jobs::OpOutcome::Forked { name, version } => {
+                format!("资产库：已分叉出新资产「{name}」v{version}（父资产 head 零复制）")
+            }
             resource_jobs::OpOutcome::GlobalDeleted {
                 name,
                 versions,
                 tables,
                 projects,
             } => format!(
-                "资产库：已从全局删除「{name}」（{versions} 个版本 / {tables} 张表）；曾分发到 {projects} 个项目，那些副本仍在"
+                "资产库：已从全局删除「{name}」（{versions} 个版本索引 / {tables} 张待回收快照）；曾分发到 {projects} 个项目，那些副本仍在"
             ),
             resource_jobs::OpOutcome::Failed { action, reason } => {
                 format!("资产库：{action}失败：{reason}")
             }
-            // 冲突已在前面拦截并转三选对话框，走不到这里；补齐 match 穷尽性。
+            // 冲突 / 基准过期都已在前面拦截并转对话框，走不到这里；补齐 match 穷尽性。
             resource_jobs::OpOutcome::Conflict { .. } => {
                 unreachable!("冲突回执已在前面转对话框处理")
+            }
+            resource_jobs::OpOutcome::StaleBase { .. } => {
+                unreachable!("发布基准过期已在前面转分叉对话框处理")
             }
         };
         // 治理（2026-10-30）：动作结果按成败分级——失败走 error 级，其余 info。

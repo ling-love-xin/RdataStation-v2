@@ -4,8 +4,8 @@
 //! `InstanceOpError::Conflict`；工作线程把凭据回传事件路径，本对话框据此让用户在
 //! **同一次决策**里选一条路：
 //!
-//! - **覆盖**：旧本体移除、旧登记软删，新内容成为**同名链的下一版**（版本号接着涨、登记 id 换新；
-//!   动作不可撤销，按钮走 Danger）；
+//! - **覆盖**：本次内容成为**同名链的下一版**（版本号接着涨、资产 id 不变；
+//!   旧版本快照仍保留，由 GC 在无引用时回收；动作不可撤销，按钮走 Danger）；
 //! - **改名**：输入一个新名字，按新名重新提交（不碰旧内容）；
 //! - **取消**：不提交，只关窗。
 //!
@@ -97,16 +97,15 @@ impl ConflictKind {
 
     /// 覆盖提示（旧内容会被怎么处理，两条链路口径不同）。
     ///
-    /// 版本口径（2026-11-07 统一）：覆盖 = **同名链的下一版**（版本号接着涨、登记 id 换新），
-    /// 不是"从 v1 重开"。两端注册层都按同名（含已软删）的 `MAX(version) + 1` 取号，
-    /// 这句文案必须与那个实现同口径，否则用户会以为覆盖后历史断了。
+    /// 版本口径（2026-11-27 快照闭环）：覆盖 = **同名链的下一版**（版本号接着涨、`asset_id` 稳定），
+    /// 旧版本快照不删、留给 GC；不再是“删旧表再建一张”。
     fn overwrite_note(&self) -> &'static str {
         match self {
             ConflictKind::Promote => {
-                "覆盖将删除全局旧表并软删旧登记，新内容成为同名链的下一版（版本号接着涨）；旧表内容不可恢复。"
+                "覆盖将把本次内容作为同名链的下一版（版本号接着涨、资产 id 不变）；旧版本快照仍保留，GC 在无引用时才回收。"
             }
             ConflictKind::Distribute => {
-                "覆盖将删除项目旧表 / 旧文件并软删旧登记，新分发成为同名链的下一版（版本号接着涨）；旧本体不可恢复。"
+                "覆盖将把本次分发作为同名链的下一版（版本号接着涨、资产 id 不变）；旧版本快照交给 GC 回收。"
             }
         }
     }
@@ -133,11 +132,18 @@ pub fn open_conflict_dialog(
         let gate = conflict_gate(&seed.name, &value);
         let (hint, hint_color, can_rename) = match gate {
             ConflictRenameGate::Ready => (
-                format!("将以「{value}」{verb}，不覆盖现有内容", verb = seed.kind.verb()),
+                format!(
+                    "将以「{value}」{verb}，不覆盖现有内容",
+                    verb = seed.kind.verb()
+                ),
                 theme.colors.muted_foreground,
                 true,
             ),
-            ConflictRenameGate::Unchanged => ("名字与现有资源相同，请换一个新名称".to_string(), theme.colors.warning, false),
+            ConflictRenameGate::Unchanged => (
+                "名字与现有资源相同，请换一个新名称".to_string(),
+                theme.colors.warning,
+                false,
+            ),
             ConflictRenameGate::Blocked(hint) => (hint.to_string(), theme.colors.danger, false),
         };
 

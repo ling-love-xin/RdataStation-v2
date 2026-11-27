@@ -1,23 +1,18 @@
-//! 分析内核 · 全局**分析库**作为会话源（刀 7 方案 B）。
+//! 分析内核 · 全局**分析库**作为会话源。
 //!
 //! 口径（用户口径 + 实测，2026-11-15）：**分析库一律 DuckDB，其余一律 SQLite**。
 //! 所以「全局表」在 `<RDS_HOME>/data/system/analytics.duckdb` 里；同目录的 `global.db`
 //! 是 SQLite 元数据库（连接 / 资源归档 / 规则信任），递错了地方就查不到可分析的表。
 //!
-//! 为什么不把全局分析库 ATTACH 进进程内存单例（方案 A）：这台库有**自己的写入方**
-//! （全局持久表的落库路径与项目侧同形），而 DuckDB 在 Windows 上对同一个文件只允许
-//! 一个连接句柄（`store/src/persistence/project_db.rs:276-278` 原文）。单例是进程级长命
-//! 对象，让它持有全局分析库句柄的那一刻起，写入方就会撞
-//! 「另一个程序正在使用此文件」——这条失败模式已在 `analysis_db_exclusive_probe` 里真跑过。
-//!
-//! 所以这里走 B：**短命会话 + 只读挂载**。会话按 owner 建，用完即弃；全局分析库只在这次
-//! 分析期间被读，不改变它的生命周期。
+//! 2026-11-26 所有权收口后：全局分析库与项目分析库由分析实例（`AnalysisInstance` 底座）
+//! 独占 `ATTACH`（`rds_global` / `analytics`），会话一律从实例按 owner 派生（同 owner 再次打开
+//! 拿回同一会话）。本模块不再自己 `open` 全局库文件——那样会在 Windows 上撞
+//! 「同一个文件只能一条根连接」，也会绕过实例的写闸门。
 //!
 //! # 边界
 //!
-//! - 只读：全局分析库在本会话里不可写（这是对的——写入走它自己的 manager）；
-//! - 撞锁仍是可能的：会话建立那一刻若该库正好被某个写入方持着，DuckDB 会拒绝挂载。
-//!   这不是「可以忽略的小概率」，而是**必须给可读原因**的常态之一（见 [`open_mounted`] 的错误包装）；
+//! - 全局分析库在实例底座上是 `READ_WRITE`；写权限由「会话角色 + SQL 闸门」收住：
+//!   只有 `System` 角色能写全局库；
 //! - 别名固定 [`GLOBAL_ALIAS`]，SQL 里写 `rds_global.<表>`。
 
 use std::path::{Path, PathBuf};
@@ -50,10 +45,10 @@ pub fn global_analysis_db_path() -> Result<PathBuf, CoreError> {
     Ok(dir.join("analytics.duckdb"))
 }
 
-/// 把任意一个库文件**只读**挂进一条短命联邦会话，返回会话句柄。
+/// 把任意一个库文件**单独**挂进一条短命联邦会话，返回会话句柄（**测试/探针用**）。
 ///
-/// 单独抽出来是为了可测试：真全局库路径依赖 `RDS_HOME`，用例里用临时文件就能把
-/// 「只读挂载 + 能查到表 + 撞锁可读」三件事钉住。
+/// 生产路径不要用它：全局分析库已经由分析实例的 `ensure_base` 挂在底座上，
+/// 这里再对一个已挂载的文件 `ATTACH` 会撞「同一个文件只能一条根连接」。
 ///
 /// `db_type` 是**驱动标识**（不是扩展名猜的）：`global.db` 实测是 SQLite 文件
 /// （头部 `SQLite format 3`），所以要按 `sqlite` 挂；临时 duckdb 文件用例按 `duckdb` 挂。
@@ -156,12 +151,14 @@ fn ensure_alias_attached(
     )))
 }
 
-/// 打开全局分析库会话（刀 7 · B1）：读 `<RDS_HOME>/data/system/analytics.duckdb`，
-/// 别名 [`GLOBAL_ALIAS`]，驱动 **duckdb**（分析库一律 DuckDB）。
+/// 打开全局分析库会话：在分析实例上 `ensure_base` 挂 `rds_global` 底座，
+/// 再按 `global:{owner}` 派生一条会话，别名 [`GLOBAL_ALIAS`]，驱动 **duckdb**（分析库一律 DuckDB）。
 ///
 /// 曾经挂错过：首版按 `global.db` + sqlite 挂，那是元数据库（SQLite），里面没有可分析的表；
-/// 代价是「open 成功、随后查询报 schema/表不存在」——所以 `open_mounted` 里那道
-/// 「挂上之后核 catalog」的检查留着，不许删。
+/// 代价是「open 成功、随后查询报 schema/表不存在」——所以挂载后核 catalog 的检查留着，不许删。
+///
+/// 2026-11-26：不再对全局库文件另开连接，改为分析实例底座上的会话；文件存在性仍先核，
+/// 缺失时给出「宿主启动流程还没建它」的可读原因。
 pub fn open_global_session(owner: &str) -> Result<SessionHandle, CoreError> {
     let path = global_analysis_db_path()?;
     if !path.exists() {
@@ -177,8 +174,10 @@ pub fn open_global_session(owner: &str) -> Result<SessionHandle, CoreError> {
     instance
         .ensure_base(GLOBAL_ALIAS, &path)
         .map_err(|reason| invalid(format!("挂载库失败: {reason}")))?;
+    // owner 加前缀，避免与 `process` / 文档 owner 撞键（撞键会把别人的默认 catalog 改掉）。
+    let owner_key = format!("global:{owner}");
     let session = instance
-        .ensure_session(owner, "全局分析")
+        .ensure_session(&owner_key, "全局分析")
         .map_err(invalid)?;
     ensure_alias_attached(&session, GLOBAL_ALIAS, "duckdb")?;
     Ok(SessionHandle::Instance {
@@ -189,8 +188,8 @@ pub fn open_global_session(owner: &str) -> Result<SessionHandle, CoreError> {
 
 /// 列全局分析库里的表（来源选择器「全局分析表」档的数据源）。
 ///
-/// 走的是和取样**同一个**短命会话：列清单与读表用同一套挂载口径，不会出现
-/// 「列表里有、点下去查不到」这种两处口径分叉。
+/// 走的是和取样**同一个**实例会话：列清单与读表用同一套底座口径，
+/// 不会出现「列表里有、点下去查不到」这种两处口径分叉。
 pub fn global_tables(owner: &str) -> Result<Vec<String>, CoreError> {
     let session = open_global_session(owner)?;
     let result = session.run(&format!(

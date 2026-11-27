@@ -1,13 +1,14 @@
+use super::snapshot::dispatch_detail_label;
 use super::{
     ArchiveStatuses, FolderMemberships, PreviewMap, RecentVersions, ResourceTags, SnapshotInputs,
     VersionCounts, build_repair_rows, build_snapshot, build_trash_snapshot, build_version_rows,
     format_relative_time, format_scale, format_size, format_timestamp, tail_for,
 };
-use super::snapshot::dispatch_detail_label;
 use crate::dialogs::index_repair::RepairGroup;
 use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
-use crate::store::rows::{AnalyticsResource, ResourceVersion};
 use crate::resource_view::{GroupOption, TagOption};
+use crate::store::file_asset::FileAssetVersion;
+use crate::store::rows::{AnalyticsResource, ResourceVersion};
 use crate::{IndexIssue, IndexScanReport};
 use chrono::{DateTime, Duration, Utc};
 use engine::persistence::trash::{TrashEntry, TrashKind};
@@ -321,13 +322,16 @@ fn details_carry_per_kind_size_and_real_history_count() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
+        table_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
+        global_file_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -415,13 +419,16 @@ fn detail_carries_recent_version_lines_capped_at_three() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
         recent_versions: &recent,
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
+        table_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
+        global_file_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -429,7 +436,11 @@ fn detail_carries_recent_version_lines_capped_at_three() {
     let detail = snapshot.details.get("ar_analysis").expect("分析表详情");
     assert_eq!(detail.history_label, "5 个历史版本", "总数不受明细条数影响");
     let lines = &detail.version_timeline;
-    assert_eq!(lines.len(), 4, "当前版本 + 最多 3 条历史（装配层自己也裁一次）");
+    assert_eq!(
+        lines.len(),
+        4,
+        "当前版本 + 最多 3 条历史（装配层自己也裁一次）"
+    );
     assert!(
         lines[0].is_current,
         "时间线第一个节点必须是当前版本（点它看的就是现在这一版）"
@@ -501,13 +512,16 @@ fn version_timeline_carries_hash_and_delta_per_node() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
         recent_versions: &recent,
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
+        table_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &Default::default(),
+        global_table_versions: &Default::default(),
+        global_file_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -562,13 +576,16 @@ fn snapshot_carries_tags_for_rows_details_and_dictionary() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
+        table_versions: &Default::default(),
         tags: &tags,
         tag_dictionary: dictionary,
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
+        global_file_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -606,13 +623,16 @@ fn rows_carry_alias_and_source_table_for_the_search_surface() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
+        table_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
+        global_file_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -657,7 +677,8 @@ fn details_carry_group_name_and_preview() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
+        table_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: &folders,
@@ -667,6 +688,8 @@ fn details_carry_group_name_and_preview() {
         }],
         previews: &previews,
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
+        global_file_versions: &Default::default(),
         read_only: false,
         now,
     });
@@ -720,13 +743,16 @@ fn snapshot_counts_route_status_before_kind() {
         statuses: &statuses,
         history_counts: &VersionCounts::new(),
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
+        table_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &dispatch_usage,
+        global_table_versions: &Default::default(),
+        global_file_versions: &Default::default(),
         read_only: true,
         now,
     });
@@ -758,6 +784,20 @@ fn history_version(version: i32, size: i32, hash: &str, at: DateTime<Utc>) -> Re
     }
 }
 
+/// 文件版本索引：呈现层只关心版本号有没有 manifest。
+fn file_version(version: i32) -> crate::store::file_asset::FileAssetVersion {
+    crate::store::file_asset::FileAssetVersion {
+        resource_id: "ar_1".to_string(),
+        version,
+        manifest_id: format!("manifest-{version}"),
+        content_hash: format!("{version}0000000000000000"),
+        meta_hash: None,
+        parent_version: None,
+        content_pruned: false,
+        created_at: Utc::now(),
+    }
+}
+
 #[test]
 fn version_rows_include_current_and_compare_adjacent_versions() {
     let now = Utc::now();
@@ -769,8 +809,9 @@ fn version_rows_include_current_and_compare_adjacent_versions() {
         history_version(1, 1024, "111111111111ffff", now),
     ];
 
-    // 只有 v2 还留着副本：v1 的已被保留策略裁掉。
-    let rows = build_version_rows(&current, &history, &[2], true);
+    // 只有 v2 还有 manifest：v1 的已随旧方案删除。
+    let file_versions = vec![file_version(2)];
+    let rows = build_version_rows(&current, &history, &file_versions, &[], true);
     let versions: Vec<i32> = rows.iter().map(|row| row.version).collect();
     assert_eq!(versions, vec![3, 2, 1], "降序，且当前版本也在列表里");
     assert!(rows[0].is_current);
@@ -797,7 +838,7 @@ fn version_rows_tolerate_unreadable_snapshots() {
         created_at: Utc::now(),
     };
 
-    let rows = build_version_rows(&current, &[broken], &[], false);
+    let rows = build_version_rows(&current, &[broken], &[], &[], false);
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[1].hash_short, "—", "解析不出来的快照不伪造指纹");
     assert_eq!(rows[1].size_label, "");
@@ -824,13 +865,16 @@ fn detail_carries_definition_only_when_it_has_content() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &VersionCounts::new(),
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
+        table_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &Default::default(),
+        global_table_versions: &Default::default(),
+        global_file_versions: &Default::default(),
         read_only: false,
         now: Utc::now(),
     });
@@ -868,13 +912,16 @@ fn history_label_reports_restorable_copies_only_when_known() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
         recent_versions: empty_versions(),
-        version_copies: &copies,
+        restorable_versions: &copies,
+        table_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &Default::default(),
+        global_table_versions: &Default::default(),
+        global_file_versions: &Default::default(),
         read_only: false,
         now: Utc::now(),
     });
@@ -894,13 +941,16 @@ fn history_label_reports_restorable_copies_only_when_known() {
         statuses: &ArchiveStatuses::new(),
         history_counts: &counts,
         recent_versions: empty_versions(),
-        version_copies: &Default::default(),
+        restorable_versions: &Default::default(),
+        table_versions: &Default::default(),
         tags: empty_tags(),
         tag_dictionary: Vec::new(),
         folders: empty_folders(),
         group_dictionary: Vec::new(),
         previews: empty_previews(),
         dispatch_usage: &Default::default(),
+        global_table_versions: &Default::default(),
+        global_file_versions: &Default::default(),
         read_only: false,
         now: Utc::now(),
     });
@@ -908,5 +958,93 @@ fn history_label_reports_restorable_copies_only_when_known() {
     assert_eq!(
         detail.history_label, "3 个历史版本",
         "不知道就别报数（0 份可还原是另一回事）"
+    );
+}
+
+/// 全局文件资产的历史不能是空的：版本节点要走 `file_asset_versions`，
+/// 被裁掉副本的那一版要明确标成不可还原。
+#[test]
+fn global_file_versions_feed_detail_timeline() {
+    let now = Utc::now();
+    let mut resource = row_model("gf_1", "file", Some(10));
+    resource.scope = "global".to_string();
+    resource.version = 3;
+
+    let versions = vec![
+        FileAssetVersion {
+            resource_id: "gf_1".to_string(),
+            version: 1,
+            manifest_id: "fm_1".to_string(),
+            content_hash: "111111111111".to_string(),
+            meta_hash: None,
+            parent_version: None,
+            content_pruned: false,
+            created_at: now,
+        },
+        FileAssetVersion {
+            resource_id: "gf_1".to_string(),
+            version: 2,
+            manifest_id: "fm_2".to_string(),
+            content_hash: "222222222222".to_string(),
+            meta_hash: None,
+            parent_version: Some(1),
+            content_pruned: true,
+            created_at: now,
+        },
+        FileAssetVersion {
+            resource_id: "gf_1".to_string(),
+            version: 3,
+            manifest_id: "fm_3".to_string(),
+            content_hash: "333333333333".to_string(),
+            meta_hash: None,
+            parent_version: Some(2),
+            content_pruned: false,
+            created_at: now,
+        },
+    ];
+    let mut file_versions = std::collections::HashMap::new();
+    file_versions.insert("gf_1".to_string(), versions);
+
+    let snapshot = build_snapshot(SnapshotInputs {
+        assertions: Default::default(),
+        lifecycles: Default::default(),
+        resources: &[],
+        global_rows: Vec::new(),
+        global_resources: vec![resource],
+        statuses: &ArchiveStatuses::new(),
+        history_counts: &VersionCounts::new(),
+        recent_versions: empty_versions(),
+        restorable_versions: &Default::default(),
+        table_versions: &Default::default(),
+        tags: empty_tags(),
+        tag_dictionary: Vec::new(),
+        folders: empty_folders(),
+        group_dictionary: Vec::new(),
+        previews: empty_previews(),
+        dispatch_usage: &Default::default(),
+        global_table_versions: &Default::default(),
+        global_file_versions: &file_versions,
+        read_only: false,
+        now,
+    });
+
+    let detail = snapshot.details.get("gf_1").expect("全局文件详情");
+    assert_eq!(
+        detail.history_label, "2 个历史版本（1 份可还原）",
+        "v2 副本已被裁掉，不能算可还原"
+    );
+    let versions: Vec<i32> = detail
+        .version_timeline
+        .iter()
+        .map(|line| line.version)
+        .collect();
+    assert_eq!(versions, vec![3, 2, 1], "当前 + 历史必须降序");
+    assert!(
+        !detail.version_timeline[1].has_copy,
+        "被裁副本的那一版要明确标成不可还原"
+    );
+    assert!(
+        detail.version_timeline[2].has_copy,
+        "v1 的副本还在，可以还原"
     );
 }

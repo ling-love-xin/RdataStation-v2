@@ -5,10 +5,9 @@
 //!   （`ProjectDatabaseManager::open` 是 async，运行期谁也不能把一条连接挂很久）；
 //! - DuckDB 写是**阻塞**的，写在事件路径上会卡住 UI（gpui 规范 §状态与副作用）。
 //!
-//! 数据为什么要搬运（而不是 ATTACH）：`tmp_q_` 在**进程内存单例**（in-memory 库，别的实例挂不到），
-//! 且项目库被别的连接持有时 ATTACH 必失败（实测见
-//! `crates/engine/tests/analysis_db_exclusive_probe.rs`）。所以走
-//! `engine::duckdb::temp_table::promote::write_table_across_connections`（Parquet 中转）。
+//! 为什么不用中转文件：`tmp_q_` 在根连接的 `rds_tmp` schema，项目库是同一根连接上的
+//! `analytics`——2026-11-26 所有权收口后两边同源，直接在项目会话上
+//! `CREATE TABLE analytics.<目标> AS SELECT * FROM rds_tmp.<源>` 即可。
 //!
 //! 口径：目标表名 = [`persistent_table_name`]（`res_<描述>_<时间戳>`），已存在则**报错**不覆盖
 //! （覆盖别人的持久表不是「顺手做对」的事，要显式再来一次）。
@@ -18,10 +17,9 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
 use engine::duckdb::temp_table::promote::{
-    persistent_table_name, write_table_across_connections, PromoteMode,
+    persistent_table_name, write_shared_temp_to_project, PromoteMode,
 };
 use engine::persistence::project_db::ProjectDatabaseManager;
-use engine::services::duckdb_service::DuckDbService;
 
 /// 一次落库请求
 #[derive(Debug, Clone)]
@@ -44,15 +42,17 @@ pub enum PersistOutcome {
         rows: u64,
         columns: Option<i32>,
         label: String,
-        /// 升级成资产的回执（`Ok` = 已登记；`Err` = 表写成了但没登记上，原因给人看）。
-        ///
-        /// 表写完才谈得上登记：登记失败**不回滚表**（数据是用户的，不能因为索引没落上就丢），
-        /// 所以这里把两件事分开报，由宿主提示成「表已落、资产没登记上」。
-        asset: Result<analytics_resource::table_asset::TableAssetOutcome, String>,
     },
-    Failed { label: String, reason: String },
+    Failed {
+        label: String,
+        reason: String,
+    },
     /// 刚物化出临时表（不写库）：让 UI 刷新一次清单并留一句痕
-    Materialized { table: String, rows: u64, label: String },
+    Materialized {
+        table: String,
+        rows: u64,
+        label: String,
+    },
 }
 
 struct Shared {
@@ -80,22 +80,13 @@ fn shared() -> &'static Shared {
                         &request.description,
                     ) {
                         Ok((table, rows, columns)) => {
-                            // 写表成功 → 立刻登记成资产（同一线程上顺手做，不回 UI 线程）。
-                            // 口径：升级 = 写成项目分析库的持久表 + 登记成表型资产，
-                            // 只写表不登记就会出现「库里有表、资产列表里没有」的半截状态。
-                            let asset = register_table_asset(
-                                &request.project_root,
-                                &request.label,
-                                &table,
-                                rows,
-                                columns,
-                            );
+                            // 只落普通表：资产由用户在数据对象面板显式「归档」时创建
+                            //（T8：存为表 ≠ 归档，存为表不再自动登记）。
                             PersistOutcome::Done {
                                 table,
                                 rows,
                                 columns,
                                 label: request.label.clone(),
-                                asset,
                             }
                         }
                         Err(reason) => PersistOutcome::Failed {
@@ -175,15 +166,6 @@ pub fn persist_result_table(
     let table = persistent_table_name(description);
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
     let manager = open_project_manager(&runtime, project_root)?;
-
-    // 顺序固定：先取**源**（内存单例），再锁项目连接——反过来的实现在别处若也先拿项目再拿
-    // 单例，就会凑出死锁。这里只此一处同时持两把锁。
-    let singleton = DuckDbService::get_or_create_duckdb()
-        .map_err(|e| format!("取内存分析库失败: {e}"))?;
-    let source = singleton
-        .lock()
-        .map_err(|e| format!("内存分析库锁中毒: {e}"))?;
-
     let project_conn = manager
         .duckdb_conn()
         .ok_or_else(|| "项目库读模式打开（无写连接）：请重新打开项目后重试".to_string())?;
@@ -195,23 +177,16 @@ pub fn persist_result_table(
         .as_mut()
         .ok_or_else(|| "项目写连接已关闭：请重新打开项目后重试".to_string())?;
 
-    let result = write_table_across_connections(
-        &source,
-        dest,
-        source_table,
-        &table,
-        PromoteMode::Create,
-    )
-    .map_err(|e| {
-        let text = e.to_string();
-        if text.contains("already exists") || text.contains("已存在") {
-            format!("项目分析库已存在表 {table}：换一个结果名（再分析一次）或先删掉旧表")
-        } else if text.contains("另一个程序正在使用此文件") || text.contains("already open") {
-            format!("项目分析库正被别的操作占用，请稍后重试（{text}）")
-        } else {
-            format!("写入项目分析库失败: {text}")
-        }
-    })?;
+    // 源在根连接的 `rds_tmp`，目标在本会话的 `analytics`：一次 CTAS，不落中转文件。
+    let result = write_shared_temp_to_project(dest, source_table, &table, PromoteMode::Create)
+        .map_err(|e| {
+            let text = e.to_string();
+            if text.contains("already exists") || text.contains("已存在") {
+                format!("项目分析库已存在表 {table}：换一个结果名（再分析一次）或先删掉旧表")
+            } else {
+                format!("写入项目分析库失败: {text}")
+            }
+        })?;
 
     // 列数就地量一次：此刻项目写连接还在手里，另开一次纯属浪费。
     // 量不到就给 `None`（详情宁可不显示列数，也不显示猜的数）。
@@ -219,7 +194,6 @@ pub fn persist_result_table(
 
     drop(slot);
     drop(guard);
-    drop(source);
     drop(manager);
     Ok((table, result, columns))
 }
@@ -250,7 +224,8 @@ pub(crate) fn with_project_write_connection<T>(
 
 /// 列数：走 `information_schema.columns`（`DESCRIBE` 在本仓实测拿不到结果集，
 /// 见 `a_result_table_lands_in_the_project_analytics_db` 的核对段也走同一张视图）。
-pub(crate) fn count_columns(conn: &duckdb::Connection, table: &str) -> Option<i32> {    let count: i64 = conn
+pub(crate) fn count_columns(conn: &duckdb::Connection, table: &str) -> Option<i32> {
+    let count: i64 = conn
         .query_row(
             "SELECT count(*) FROM information_schema.columns \
              WHERE table_name = ?1 AND table_schema = 'main'",
@@ -259,34 +234,6 @@ pub(crate) fn count_columns(conn: &duckdb::Connection, table: &str) -> Option<i3
         )
         .ok()?;
     i32::try_from(count).ok().filter(|count| *count > 0)
-}
-
-/// 登记成表型资产（升级闭环的后半段）。
-///
-/// 单独一个 runtime：本函数在 worker 线程（普通 std 线程）上跑，
-/// `persist_result_table` 的 runtime 已随它返回而散；再建一个短命 runtime 比把两段
-/// 塞进同一个 async 作用域更简单，也不构成嵌套。
-pub(crate) fn register_table_asset(
-    project_root: &Path,
-    label: &str,
-    table: &str,
-    rows: u64,
-    columns: Option<i32>,
-) -> Result<analytics_resource::table_asset::TableAssetOutcome, String> {
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
-    let request = analytics_resource::table_asset::TableAssetRequest {
-        // 显示名用结果集的展示名（「结果 3」），不把 `res_` 前缀带进资产名
-        name: label.to_string(),
-        analytics_table: table.to_string(),
-        row_count: Some(i32::try_from(rows).unwrap_or(i32::MAX)),
-        column_count: columns,
-    };
-    runtime
-        .block_on(analytics_resource::table_asset::register_at(
-            project_root,
-            request,
-        ))
-        .map_err(|error| error.to_string())
 }
 
 /// 打开项目库，**对并发窗口做短重试**。
@@ -306,7 +253,8 @@ fn open_project_manager(
             Ok(manager) => return Ok(manager),
             Err(error) => {
                 let text = error.to_string();
-                let busy = text.contains("另一个程序正在使用此文件") || text.contains("already open");
+                let busy =
+                    text.contains("另一个程序正在使用此文件") || text.contains("already open");
                 last = if busy {
                     format!("项目分析库正被别的操作占用（{text}）")
                 } else {
@@ -321,103 +269,113 @@ fn open_project_manager(
             }
         }
     }
-    Err(format!("{last}；请稍后重试（同一时间只允许一个项目库写连接）"))
+    Err(format!(
+        "{last}；请稍后重试（同一时间只允许一个项目库写连接）"
+    ))
 }
 // ---------------------------------------------------------------------------
-// 「登记为资产」通道（数据对象面板：给项目分析库里已有的表补身份）
+// 「归档为表资产」通道（数据对象面板：把项目分析库里已有的普通表冻结成快照）
 //
-// 与落库通道分开排一条队列：两者语义不同（落库是搬数据 + 登记，登记只写一行元数据），
-// 混在一个请求类型里会让"失败要不要回滚表"这类判断跟着变复杂。共用同一套形态
-// （worker 线程 + 单槽 + UI 泵取），所以回执仍在状态栏、仍不在事件路径上写库。
+// 与落库通道分开排一条队列：落库只写普通表，本通道显式归档并消费源表，语义不同。
+// 共用同一套形态（worker 线程 + 单槽 + UI 泵取），回执仍在状态栏。
 // ---------------------------------------------------------------------------
 
-/// 一次「登记为资产」请求
+/// 一次「归档为表资产」请求
 #[derive(Debug, Clone)]
-pub struct RegisterRequest {
+pub struct ArchiveTableJobRequest {
     pub project_root: PathBuf,
-    /// 显示名（不带 `res_` 前缀；同一张表已有资产时以原资产名为准）
+    /// 显示名（不带 `res_` 前缀；同名活跃资产会追加版本）
     pub label: String,
-    /// 本体表名（项目分析库里那张表）
+    /// 源表名（项目分析库 `main` 里那张普通表）
     pub table: String,
 }
 
 #[derive(Debug, Clone)]
-pub enum RegisterOutcome {
+pub enum ArchiveTableOutcome {
     Done { notice: String },
     Failed { label: String, reason: String },
 }
 
-struct RegisterShared {
-    tx: Sender<RegisterRequest>,
-    outcome: Mutex<Option<RegisterOutcome>>,
+struct ArchiveTableShared {
+    tx: Sender<ArchiveTableJobRequest>,
+    outcome: Mutex<Option<ArchiveTableOutcome>>,
 }
 
-static REGISTER_JOBS: OnceLock<RegisterShared> = OnceLock::new();
+static ARCHIVE_TABLE_JOBS: OnceLock<ArchiveTableShared> = OnceLock::new();
 
-fn register_shared() -> &'static RegisterShared {
-    REGISTER_JOBS.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<RegisterRequest>();
+fn archive_table_shared() -> &'static ArchiveTableShared {
+    ARCHIVE_TABLE_JOBS.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<ArchiveTableJobRequest>();
         std::thread::Builder::new()
-            .name("rds-register-asset".to_string())
+            .name("rds-archive-table".to_string())
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
                 for request in rx {
-                    let outcome = match register_existing_table(&request) {
-                        Ok(notice) => RegisterOutcome::Done { notice },
-                        Err(reason) => RegisterOutcome::Failed {
+                    let outcome = match archive_existing_table(&request) {
+                        Ok(notice) => ArchiveTableOutcome::Done { notice },
+                        Err(reason) => ArchiveTableOutcome::Failed {
                             label: request.label.clone(),
                             reason,
                         },
                     };
-                    if let Ok(mut slot) = register_shared().outcome.lock() {
+                    if let Ok(mut slot) = archive_table_shared().outcome.lock() {
                         *slot = Some(outcome);
                     }
                 }
             })
-            .expect("failed to spawn register-asset worker");
-        RegisterShared {
+            .expect("failed to spawn archive-table worker");
+        ArchiveTableShared {
             tx,
             outcome: Mutex::new(None),
         }
     })
 }
 
-/// 提交一次登记（立即返回；结果由 UI 泵取 [`take_register_outcome`] 取走）
-pub fn submit_register(request: RegisterRequest) -> Result<(), String> {
+/// 提交一次显式归档（立即返回；结果由 UI 泵取 [`take_archive_table_outcome`] 取走）
+pub fn submit_archive_table(request: ArchiveTableJobRequest) -> Result<(), String> {
     if request.table.trim().is_empty() {
-        return Err("登记为资产需要本体表名".to_string());
+        return Err("归档为表资产需要源表名".to_string());
     }
-    register_shared()
+    archive_table_shared()
         .tx
         .send(request)
-        .map_err(|e| format!("登记任务入队失败: {e}"))
+        .map_err(|e| format!("归档任务入队失败: {e}"))
 }
 
-pub fn take_register_outcome() -> Option<RegisterOutcome> {
-    register_shared()
+pub fn take_archive_table_outcome() -> Option<ArchiveTableOutcome> {
+    archive_table_shared()
         .outcome
         .lock()
         .ok()
         .and_then(|mut slot| slot.take())
 }
 
-/// 同步登记（worker 与用例共用）：自建 runtime 跑 `register_existing_at`。
-fn register_existing_table(request: &RegisterRequest) -> Result<String, String> {
+/// 同步归档（worker 与用例共用）：显式把项目分析库里的普通表冻结成表资产。
+fn archive_existing_table(request: &ArchiveTableJobRequest) -> Result<String, String> {
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
-    let asset = analytics_resource::table_asset::TableAssetRequest {
+    let archive = analytics_resource::table_asset::ArchiveTableRequest {
         name: request.label.clone(),
-        analytics_table: request.table.clone(),
-        // 表已在库里，行列数这里不另查（查要开连接，收益只是详情里多两个数字）
-        row_count: None,
-        column_count: None,
+        source_schema: "main".to_string(),
+        source_table: request.table.clone(),
+        asset_id: None,
+        consume_source: true,
     };
     let outcome = runtime
-        .block_on(analytics_resource::table_asset::register_existing_at(
+        .block_on(analytics_resource::table_asset::archive_table_at(
             &request.project_root,
-            asset,
+            &archive,
         ))
         .map_err(|error| error.to_string())?;
-    Ok(outcome.notice())
+    Ok(format!(
+        "已归档为资产「{}」v{}（源表{}）",
+        outcome.name,
+        outcome.version,
+        if outcome.source_consumed {
+            "已消费"
+        } else {
+            "保留"
+        }
+    ))
 }
 
 #[cfg(test)]

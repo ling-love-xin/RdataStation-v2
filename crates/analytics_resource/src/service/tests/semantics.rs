@@ -29,7 +29,7 @@ fn assertion() -> ArchiveAssertion {
 
 #[tokio::test]
 async fn t150_first_assertion_is_persisted_with_timeline_event() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let id = archived(&service, &dir).await;
 
     let hash = service
@@ -56,7 +56,7 @@ async fn t150_first_assertion_is_persisted_with_timeline_event() {
 
 #[tokio::test]
 async fn t151_only_definition_changes_create_semantic_events() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let id = archived(&service, &dir).await;
     let original = assertion();
     let first_hash = service.set_assertion(&id, original.clone()).await.expect("first");
@@ -92,7 +92,7 @@ async fn t151_only_definition_changes_create_semantic_events() {
 
 #[tokio::test]
 async fn t152_certification_records_lifecycle_and_event() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let id = archived(&service, &dir).await;
     assert_eq!(service.lifecycle(&id).await.expect("default"), Lifecycle::Draft);
 
@@ -114,7 +114,7 @@ async fn t152_certification_records_lifecycle_and_event() {
 
 #[tokio::test]
 async fn t153_empty_assertion_is_rejected() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let id = archived(&service, &dir).await;
     assert!(service.set_assertion(&id, ArchiveAssertion::default()).await.is_err());
     assert!(service.assertion(&id).await.expect("read").is_none());
@@ -123,7 +123,7 @@ async fn t153_empty_assertion_is_rejected() {
 
 #[tokio::test]
 async fn t154_superseded_writes_ref_and_validation_is_deduplicated() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let id = archived(&service, &dir).await;
 
     service
@@ -162,7 +162,7 @@ async fn t154_superseded_writes_ref_and_validation_is_deduplicated() {
 
 #[tokio::test]
 async fn t155_dropping_back_to_draft_is_recorded() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let id = archived(&service, &dir).await;
     service
         .set_lifecycle(&id, Lifecycle::Certified, None, None)
@@ -186,7 +186,7 @@ async fn t155_dropping_back_to_draft_is_recorded() {
 
 #[tokio::test]
 async fn t156_clearing_expiry_keeps_manual_validation() {
-    let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+    let (service, dir) = test_service().await;
     let id = archived(&service, &dir).await;
     service
         .store()

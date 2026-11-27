@@ -211,11 +211,11 @@ fn enter_on_a_group_header_folds_that_group() {
 
 #[test]
 fn header_menu_actions_follow_the_prototype_order() {
-    // 原型 §2.1 的 `⋯` 四项，自上而下：重建索引… / 打开资源目录 / 回收站… / 刷新。
-    // 顺序与文案都是用户可见的约定，改动要有意识地改这条测试。
+    // `⋯` 三项，自上而下：重建索引… / 打开资源目录 / 刷新。
+    // 回收站不在这里：唯一入口在草稿箱栏（草稿箱与资产库共用一个回收站）。
     let labels: Vec<&str> = HeaderMenuAction::ALL.iter().map(|a| a.label()).collect();
-    assert_eq!(labels, vec!["重建索引…", "打开资源目录", "回收站…", "刷新"]);
-    assert_eq!(HeaderMenuAction::ALL.len(), 4);
+    assert_eq!(labels, vec!["重建索引…", "打开资源目录", "刷新"]);
+    assert_eq!(HeaderMenuAction::ALL.len(), 3);
 }
 
 #[test]
@@ -366,6 +366,7 @@ fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> Ar
         source_connection_id: None,
         source_table: None,
         content_hash: None,
+        duckdb_readable: false,
         payload_rel_path: payload.map(str::to_string),
         analytics_table: None,
         has_definition: false,
@@ -381,26 +382,28 @@ fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> Ar
         group: None,
         preview: crate::preview::Preview::default(),
         dispatch_label: String::new(),
+        checkout_label: None,
     }
 }
 
 #[test]
 fn view_stats_only_for_data_sources_that_can_be_sampled() {
-    let file = |payload: Option<&str>| detail(ArchiveKind::File, ArchiveStatus::Normal, payload);
+    let file = |payload: Option<&str>, readable: bool| {
+        let mut row = detail(ArchiveKind::File, ArchiveStatus::Normal, payload);
+        row.duckdb_readable = readable;
+        row
+    };
 
-    // 受管文件：本体扩展名得是 DuckDB 读得动的（大小写不敏感、中文名照认）。
-    assert!(can_view_stats(&file(Some("orders.csv"))));
-    assert!(can_view_stats(&file(Some("2026 预算.XLSX"))));
-    assert!(can_view_stats(&file(Some("data/events.ndjson"))));
-    // 非数据文件：`.sql` 是脚本不是数据，不给入口（不是“点了才说不行”）。
-    assert!(!can_view_stats(&file(Some("dau.sql"))));
-    assert!(!can_view_stats(&file(None)));
-    // 缺失的行：本体不在，取不到数（即便扩展名可读）。
-    assert!(!can_view_stats(&detail(
-        ArchiveKind::File,
-        ArchiveStatus::Missing,
-        Some("orders.csv")
-    )));
+    // 能力事实来自归档探测，不看扩展名：同一个 `.csv` 探不到结构也不给入口。
+    assert!(can_view_stats(&file(Some("orders.csv"), true)));
+    assert!(!can_view_stats(&file(Some("orders.csv"), false)));
+    // 反过来，探测成功就不受扩展名限制（不再按后缀二次猜）。
+    assert!(can_view_stats(&file(Some("assets/blob.data"), true)));
+    assert!(!can_view_stats(&file(None, true)), "没有本体路径取不到数");
+    // 缺失的行：本体不在，取不到数（即便能力事实为真）。
+    let mut missing = detail(ArchiveKind::File, ArchiveStatus::Missing, Some("orders.csv"));
+    missing.duckdb_readable = true;
+    assert!(!can_view_stats(&missing));
 
     // 远端引用：连接与表名都齐了才给（取样 SQL 由宿主按驱动拼）。
     let mut reference = detail(ArchiveKind::TableRef, ArchiveStatus::Normal, None);
@@ -409,17 +412,4 @@ fn view_stats_only_for_data_sources_that_can_be_sampled() {
     assert!(!can_view_stats(&reference), "没有连接就不知道去哪取样");
     reference.source_table = Some("public.orders".to_string());
     assert!(can_view_stats(&reference));
-
-    // 数据文件：扩展名可读（口径只有一处 `engine::duckdb::file_reader_function`）才给入口。
-    assert!(can_view_stats(&detail(
-        ArchiveKind::File,
-        ArchiveStatus::Normal,
-        Some("resources/dau.csv")
-    )));
-    // 不是数据文件的受管文件（`.md`）没有可取的数：不给入口。
-    assert!(!can_view_stats(&detail(
-        ArchiveKind::File,
-        ArchiveStatus::Normal,
-        Some("resources/notes.md")
-    )));
 }

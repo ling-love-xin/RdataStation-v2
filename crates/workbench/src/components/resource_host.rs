@@ -36,6 +36,10 @@ impl ResourceHostBackend for WorkbenchResourceBackend {
         self.shared.project_root()
     }
 
+    fn global_system_dir(&self) -> Option<PathBuf> {
+        engine::migration::get_system_dir().ok()
+    }
+
     fn read_only(&self) -> bool {
         self.shared.project_ui.borrow().read_only
     }

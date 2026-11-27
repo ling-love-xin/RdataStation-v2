@@ -425,10 +425,11 @@ pub fn bases_fingerprint() -> String {
     parts.join(";")
 }
 
-/// 把底座只读挂进会话（**缺文件跳过**：项目刚建、全局库还没初始化都不是错误）
+/// 把底座挂进会话（**缺文件跳过**：项目刚建、全局库还没初始化都不是错误）
 ///
-/// 公开给分析实例用：实例是"一台分析引擎"，底座必须在实例上，而不是某一条会话上
-/// （`ATTACH` 本身就是实例级事实，挂在哪条会话上都对所有会话可见）。
+/// `ATTACH` 是实例级事实；生产路径下项目 / 全局库已经由 `shared::duckdb_root`
+/// 挂在同一根连接上，这里对已挂别名直接跳过（否则会报 “already attached”）。
+/// 只有根连接还没挂的底座才尝试补挂；缺文件仍不造库。
 pub(crate) fn attach_bases(conn: &Connection) -> Vec<(String, Result<(), String>)> {
     let bases = BASES
         .lock()
@@ -441,9 +442,13 @@ pub(crate) fn attach_bases(conn: &Connection) -> Vec<(String, Result<(), String>
             out.push((base.alias, Err("库文件还没建".to_string())));
             continue;
         }
-        let literal = base.path.replace('\'', "''");
         let alias = base.alias.clone();
-        let sql = format!("ATTACH '{literal}' AS {alias} (READ_ONLY)");
+        if is_attached(conn, &alias) {
+            out.push((alias, Ok(())));
+            continue;
+        }
+        let literal = base.path.replace('\'', "''");
+        let sql = format!("ATTACH '{literal}' AS {alias} (READ_WRITE)");
         let outcome = conn
             .execute_batch(&sql)
             .map_err(|error| format!("底座 {alias} 挂不上（可能正被写入方持有）：{error}"));
@@ -1026,7 +1031,8 @@ mod tests {
         set_bases(Vec::new());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!with_bases.is_empty());
-        assert!(!without_bases.is_empty());
+        // 清空后指纹就是空串：它是「无底座」的稳定标识，不是缺失值。
+        assert!(without_bases.is_empty(), "{without_bases:?}");
     }
 
     /// 两个源跨源 join：未限定名走主源，限定名走各自

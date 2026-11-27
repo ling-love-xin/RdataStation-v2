@@ -27,7 +27,9 @@ pub(crate) use std::cell::Cell;
 pub(crate) use std::rc::Rc;
 
 pub(crate) use gpui_kit::component::IndexPath;
-pub(crate) use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
+pub(crate) use gpui_kit::component::dock::{
+    BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup,
+};
 pub(crate) use gpui_kit::component::input::{InputEvent, InputState};
 pub(crate) use gpui_kit::component::list::ListState;
 pub(crate) use gpui_kit::*;
@@ -36,18 +38,17 @@ pub(crate) use crate::detail_view::ArchiveDetail;
 pub(crate) use crate::dnd::{self, GroupDrop};
 pub(crate) use crate::filter::{self, ResourcesFilter, SortField, SortOrder, VisibleItem};
 pub(crate) use crate::model::{
-    ActionContext, ArchiveKind, ArchiveStatus, ArchiveUndo, DeleteTarget, RowScope,
-    TagTarget, can_checkout, can_delete_row, can_distribute, can_edit_tags, can_move_to_group,
-    can_open, can_promote, can_rename,
+    ActionContext, ArchiveKind, ArchiveStatus, ArchiveUndo, DeleteTarget, RowScope, TagTarget,
+    can_checkout, can_delete_row, can_distribute, can_edit_tags, can_move_to_group, can_open,
+    can_promote, can_rename,
 };
 
 // ---- P1 拆分：视图模型/行级纯函数 -> row_meta；列表委托 -> list_delegate；区域渲染 -> panel_render ----
 mod row_meta;
 pub use row_meta::{
     ArchiveCounts, ArchiveRow, BadgeTone, DEFAULT_GROUP_MARKER, GroupOption, InstanceFilter,
-    ResourcesSnapshot, RowClick, TagOption, badge_tone, can_view_stats,
-    classify_row_click, default_group_entry_label, row_tail, strength_badge, tag_entry_label,
-    tag_targets,
+    ResourcesSnapshot, RowClick, TagOption, badge_tone, can_view_stats, classify_row_click,
+    default_group_entry_label, row_tail, strength_badge, tag_entry_label, tag_targets,
 };
 pub(crate) use row_meta::{apply_row_click, kind_icon};
 // `classify_click` 仅窗口测试引用（`tests.rs` 经 `use super::` 取），生产路径无调用方。
@@ -186,10 +187,11 @@ pub trait ResourcesHost: 'static {
     /// 宿主按项目分桶写设置（`resources.collapsed_groups`）；传的是**当前全集**而不是增量：
     /// 增量写入在“面板换了项目 / 分组被删”这些场景下容易和旧值叠出幽灵记录。
     fn remember_collapsed(&self, collapsed_keys: &[String], cx: &mut App);
-    /// 打开资源回收站（面板头「⋯ → 回收站…」）。
+    /// 打开资源回收站。
     ///
-    /// 回收站是**项目级**的（与草稿箱共用一处，模块硬约束 5）：对话框只列本模块的条目，
-    /// 别人的只给一句说明（还原归它自己的模块）。
+    /// 面板头不再摆入口；草稿箱栏经 `ScratchpadHost::open_asset_trash` 转到这里，
+    /// 回收站栏是唯一入口（模块硬约束 5）。回收站是**项目级**的（与草稿箱共用一处），
+    /// 对话框只列本模块的条目，别人的只给一句说明（还原归它自己的模块）。
     fn request_open_trash(&self, window: &mut Window, cx: &mut App);
     /// 重新取数（面板头「⋯ → 刷新」）。
     ///
@@ -223,8 +225,18 @@ pub trait ResourcesHost: 'static {
         _cx: &mut App,
     ) {
     }
-    /// 从全局实例删除（刀 B）：删全局各版表与登记，已分发到项目的副本不受影响。
+    /// 把全局资产移入回收站（刀 B）：只软删当前活跃登记，表 / 文件本体 / 版本快照保留。
     fn request_delete_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
+    /// 把全局资产恢复到历史版本：表型复制旧表，文件型复制旧副本，都生成新版本。
+    ///
+    /// `from = None` 兜底恢复「上一版」；`Some(v)` 恢复时间线选中的那一版。
+    fn request_restore_global_previous(
+        &self,
+        detail: &ArchiveDetail,
+        from: Option<i32>,
+        window: &mut Window,
+        cx: &mut App,
+    );
     /// 查看来源链（刀 C）：顺着一行行的直接上游往上追（只读，不改数据）。
     fn request_show_origin_chain(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
 
@@ -249,7 +261,10 @@ pub trait ResourcesHost: 'static {
     }
 }
 
-/// 面板头「⋯」菜单的动作（原型 §2.1 四项；顺序即菜单顺序）。
+/// 面板头「⋯」菜单的动作（原型 §2.1；顺序即菜单顺序）。
+///
+/// 回收站**不在这里**：项目回收站的唯一入口在草稿箱栏（草稿箱与资产库条目共用一个
+/// 回收站）。资产库面板只保留索引、资源目录与刷新。
 ///
 /// 单独成枚举而不是散在渲染闭包里：菜单项文案、顺序与去向可以被单测钉住
 /// ——弹层点击在窗口测试里模拟不了，这是那份测试的入口。
@@ -259,27 +274,19 @@ pub enum HeaderMenuAction {
     RebuildIndex,
     /// 打开资源目录（`{项目}/resources/`）。
     OpenPayloadDir,
-    /// 回收站…
-    OpenTrash,
     /// 刷新。
     Refresh,
 }
 
 impl HeaderMenuAction {
-    /// 菜单顺序（原型 §2.1 自上而下：重建索引… / 打开资源目录 / 回收站… / 刷新）。
-    pub const ALL: [Self; 4] = [
-        Self::RebuildIndex,
-        Self::OpenPayloadDir,
-        Self::OpenTrash,
-        Self::Refresh,
-    ];
+    /// 菜单顺序（原型 §2.1 自上而下：重建索引… / 打开资源目录 / 刷新）。
+    pub const ALL: [Self; 3] = [Self::RebuildIndex, Self::OpenPayloadDir, Self::Refresh];
 
     /// 菜单项文案（省略号表示它会开一个对话框/入口，而不是立即生效）。
     pub fn label(self) -> &'static str {
         match self {
             Self::RebuildIndex => "重建索引…",
             Self::OpenPayloadDir => "打开资源目录",
-            Self::OpenTrash => "回收站…",
             Self::Refresh => "刷新",
         }
     }
@@ -298,7 +305,6 @@ pub fn dispatch_header_action(
     match action {
         HeaderMenuAction::RebuildIndex => host.request_index_repair(window, cx),
         HeaderMenuAction::OpenPayloadDir => host.request_open_payload_dir(window, cx),
-        HeaderMenuAction::OpenTrash => host.request_open_trash(window, cx),
         HeaderMenuAction::Refresh => host.request_refresh(window, cx),
     }
 }

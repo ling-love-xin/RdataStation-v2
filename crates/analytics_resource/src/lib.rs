@@ -5,7 +5,7 @@
 //! - `model`：领域语义类型（存档种类 / 本体状态 / 归档凭证 / 业务断言 / 效力 / 履历事件）
 //! - `store`：索引层（`project.db` 的登记读写：`resource` / `folder` / `tag` / `version`
 //!   / `timeline` / `semantics` / `refs`）
-//! - `payload`：本体层（`resources/` 受管文件、只读守卫、内容指纹、历史副本、暂存替换）
+//! - `payload`：本体层（CAS 内容寻址存储、manifest、只读守卫、内容指纹、暂存替换）
 //! - `service`：归档服务（归档 / 取回 / 再归档编排 + 变更事件 + 履历埋点）
 //! - `indexer`：索引修复（本体与登记表的三类差异：扫描只报告，修复要人工确认）
 //! - `resource_view` / `detail_view` / `dialogs`：视图层（面板 / 详情 / 对话框；都不自己取数）
@@ -54,18 +54,16 @@ pub use store::rows::{
 };
 pub use store::AnalyticsResourceStore;
 
-/// 历史版本的内容副本文件（`None` = 该版本没有副本）。
+/// 历史版本的只读内容文件（`None` = 该版本没有 manifest）。
 ///
-/// 只给宿主「用 vN 分析」这类**只读查看**用：宿主只要路径，不需要认识整套本体存储。
+/// 只给宿主「用 vN 分析」这类**只读查看**用：从 manifest 物化到项目内部路径，宿主只要路径。
 /// 挂视图 / ATTACH 归 engine 与面板，这里不越界。
-pub async fn version_copy_file(
+pub async fn version_file(
     project_root: std::path::PathBuf,
     resource_id: &str,
     version: i32,
 ) -> Result<Option<std::path::PathBuf>, shared::error::CoreError> {
-    payload::PayloadStore::new(project_root)
-        .version_copy_file(resource_id, version)
-        .await
+    jobs::version_file(project_root, resource_id, version).await
 }
 
 // 持久层回归用例（v1 蓝本搬运，Round 11 时漏声明 mod——导致 560 行用例在 v2 从未被编译）。

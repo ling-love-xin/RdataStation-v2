@@ -22,7 +22,10 @@ pub struct SnapshotInputs<'a> {
     ///
     /// 裁剪只删副本、不删版本行，所以详情要能说清“这一版还能不能还原”。
     /// 由宿主在刷新时问一次 `.RSmeta`（每资源一次目录列举，规模是面板行数）。
-    pub version_copies: &'a std::collections::HashMap<String, Vec<i32>>,
+    pub restorable_versions: &'a std::collections::HashMap<String, Vec<i32>>,
+    /// 项目表资产的版本链（按 asset_id 一次查完）：详情与版本对话框都要列历史节点。
+    pub table_versions:
+        &'a std::collections::HashMap<String, Vec<crate::store::table_asset::TableAssetVersion>>,
     pub tags: &'a ResourceTags,
     pub tag_dictionary: Vec<TagOption>,
     pub folders: &'a FolderMemberships,
@@ -35,6 +38,12 @@ pub struct SnapshotInputs<'a> {
     /// 全局存档的使用面（按全局名聚合，一次查完）：只有全局行详情才画一行摘要。
     /// 全局库未初始化 / 读失败时为空表——附加信息，不影响项目刷新。
     pub dispatch_usage: &'a std::collections::HashMap<String, crate::global::DispatchUsage>,
+    /// 全局表资产的版本链（按 asset_id 一次查完）：全局详情要列历史版本节点。
+    pub global_table_versions:
+        &'a std::collections::HashMap<String, Vec<crate::store::table_asset::TableAssetVersion>>,
+    /// 全局文件资产的版本链（与表分开取；文件没有 `table_asset_versions`）。
+    pub global_file_versions:
+        &'a std::collections::HashMap<String, Vec<crate::store::file_asset::FileAssetVersion>>,
     pub read_only: bool,
     pub now: DateTime<Utc>,
 }

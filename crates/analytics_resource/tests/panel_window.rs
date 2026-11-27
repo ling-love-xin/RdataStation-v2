@@ -179,6 +179,17 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("delete-global:{}", detail.name));
     }
+    fn request_restore_global_previous(
+        &self,
+        detail: &ArchiveDetail,
+        _from: Option<i32>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+        self.calls
+            .borrow_mut()
+            .push(format!("restore-global:{}:v{}", detail.name, detail.version - 1));
+    }
     fn request_show_origin_chain(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
         self.calls
             .borrow_mut()
@@ -290,6 +301,7 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         source_table: None,
         analytics_table: None,
         content_hash: Some("0123456789abcdef0123".to_string()),
+        duckdb_readable: false,
         payload_rel_path: Some(format!("{}.sql", row.id)),
         has_definition: false,
         definition_sql: None,
@@ -310,6 +322,7 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         },
         // 窗口用例不测使用面：空串 → 详情不多画那一行。
         dispatch_label: String::new(),
+        checkout_label: None,
     }
 }
 
@@ -1224,11 +1237,11 @@ fn header_more_button_sits_in_the_header_and_dispatches_host_actions(cx: &mut Te
         "`⋯` 按钮要在面板头里"
     );
 
-    // 四个动作依次派发（顺序就是菜单顺序）：每个都要原样落到宿主端口。
+    // 三个动作依次派发（顺序就是菜单顺序）：每个都要原样落到宿主端口。
+    // 回收站不在这里——唯一入口在草稿箱栏。
     let expected = [
         (HeaderMenuAction::RebuildIndex, "repair"),
         (HeaderMenuAction::OpenPayloadDir, "open-dir"),
-        (HeaderMenuAction::OpenTrash, "trash"),
         (HeaderMenuAction::Refresh, "refresh"),
     ];
     cx.update(|window, cx| {
@@ -1697,6 +1710,7 @@ fn detail_preview_block_renders_text_or_says_why_not(cx: &mut TestAppContext) {
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1720,6 +1734,7 @@ fn detail_preview_block_renders_text_or_says_why_not(cx: &mut TestAppContext) {
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1781,6 +1796,7 @@ fn detail_version_timeline_puts_current_first(cx: &mut TestAppContext) {
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1911,6 +1927,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1938,6 +1955,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
                 host: host.clone(),
                 read_only: true,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1959,6 +1977,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1988,6 +2007,7 @@ fn detail_tag_chips_render_with_actions_only_when_writable(cx: &mut TestAppConte
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -2013,6 +2033,7 @@ fn detail_tag_chips_render_with_actions_only_when_writable(cx: &mut TestAppConte
                 host: host.clone(),
                 read_only: true,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });

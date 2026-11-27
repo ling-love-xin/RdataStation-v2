@@ -25,6 +25,8 @@ const M6_TABLES_SQL: &str = concat!(
     include_str!("../../../store/migrations/project_meta/029_analytics_resource_refs.sql"),
     "\n",
     include_str!("../../../store/migrations/project_meta/030_analytics_resource_checkouts.sql"),
+    "\n",
+    include_str!("../../../store/migrations/project_meta/039_table_asset_snapshots.sql"),
 );
 
 impl AnalyticsResourceStore {

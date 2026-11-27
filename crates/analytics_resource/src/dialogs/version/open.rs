@@ -45,6 +45,8 @@ pub fn open_version_dialog_with(
         let theme = cx.theme();
         let rows = state.rows();
         let selected = state.selected();
+        let diff_base = state.diff_base();
+        let base_row = state.diff_base_row();
         let busy = state.busy();
         let read_only = state.read_only();
         let note = state.note();
@@ -57,6 +59,7 @@ pub fn open_version_dialog_with(
                 theme,
                 row,
                 selected == Some(row.version),
+                diff_base,
                 state.clone(),
             ));
         }
@@ -107,7 +110,13 @@ pub fn open_version_dialog_with(
         // 版本轨道（横排，进度条式）：宽容器里先把“有哪几版、我在第几版”摆出来，
         // 点节点与点表格行是同一个选中状态；表格仍是逐列明细。
         if !rows.is_empty() {
-            body = body.child(version_rail(theme, &rows, selected, state.clone()));
+            body = body.child(version_rail(
+                theme,
+                &rows,
+                selected,
+                diff_base,
+                state.clone(),
+            ));
         }
 
         body = body.child(
@@ -126,6 +135,7 @@ pub fn open_version_dialog_with(
             body = body.child(action_bar(
                 theme,
                 &row,
+                base_row.as_ref(),
                 busy,
                 read_only,
                 state.clone(),

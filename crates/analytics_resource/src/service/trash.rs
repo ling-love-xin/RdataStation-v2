@@ -54,6 +54,9 @@ impl ArchiveService {
         }
         let mode = PayloadMode::from_db_str(&resource.payload_mode);
 
+        // 2026-11-27 文件 CAS：文件型资产不再强制“先解锁退回草稿箱”。删除 = 软删登记
+        // + 本体进项目回收站；取回是独立动作（checkout），不借删除入口。
+
         // 表型：本体是项目分析库里的一张表，没有文件路径可搬。移入回收站 = 只软删
         // 资产登记（表留在分析库）——数据本身不跟着登记走，删错了还能用「登记为资产」
         // 找回身份。登记与版本元数据的永久删除走 registry-only 分支。
@@ -481,9 +484,16 @@ impl ArchiveService {
         }
         let mode = PayloadMode::from_db_str(&resource.payload_mode);
 
-        // copy：删掉副本即可（源文件本来就在原处——归档是复制，不是搬走）。
+        // copy：归档已消费草稿，撤销要把本体送回原位（立即反悔窗口）；
+        // 若原位已有用户文件，不覆盖它，只删副本。
         if mode == PayloadMode::Copy {
-            self.payload.remove_payload(&rel_path).await?;
+            if undo.source_path.exists() {
+                self.payload.remove_payload(&rel_path).await?;
+            } else {
+                self.payload
+                    .move_payload_out(&rel_path, &undo.source_path)
+                    .await?;
+            }
         }
         if let Err(error) = self.store.hard_delete_row(&undo.resource_id).await {
             // 回滚本体（copy 模式）：删行失败 → 把副本放回去（与 archive_new 的回滚同纪律）。
@@ -548,7 +558,7 @@ impl ArchiveService {
             let count: i64 = conn
                 .query_row(
                     "SELECT count(*) FROM duckdb_tables() \
-                     WHERE database_name = 'probe' AND schema_name = 'main' AND table_name = ?1",
+                     WHERE database_name = 'probe' AND table_name = ?1",
                     duckdb::params![table.as_str()],
                     |row| row.get(0),
                 )

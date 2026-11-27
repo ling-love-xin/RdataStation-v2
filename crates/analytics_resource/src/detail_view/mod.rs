@@ -22,7 +22,9 @@ pub(crate) use crate::model::{
     ArchiveKind, ArchiveStatus, DeleteTarget, PayloadMode, PromotedFrom, RowScope, can_checkout,
     can_delete_from_detail, can_open, can_rename,
 };
-pub(crate) use crate::resource_view::{BadgeTone, ResourcesHost, badge_tone, kind_icon, strength_badge};
+pub(crate) use crate::resource_view::{
+    BadgeTone, ResourcesHost, badge_tone, kind_icon, strength_badge,
+};
 pub(crate) use crate::ui;
 
 /// 指纹展示长度（前 12 位：足够比对，又不至于把面板撑爆）。
@@ -65,7 +67,9 @@ pub const ORG_SECTION_TITLE: &str = "组织";
 /// 「内容预览」分区的标题（原型 §3.1；渲染层与窗口测试共用一处）。
 pub const PREVIEW_SECTION_TITLE: &str = "内容预览";
 
-pub use crate::view_model::detail::{ArchiveDetail, ArchiveTagChip, DetailGroupOption, DetailVersionLine};
+pub use crate::view_model::detail::{
+    ArchiveDetail, ArchiveTagChip, DetailGroupOption, DetailVersionLine,
+};
 
 /// 指纹缩略：前 [`HASH_PREVIEW_LEN`] 位；无指纹（旧行 / `table_ref`）给破折号而不是空白。
 pub fn short_hash(hash: Option<&str>) -> String {
@@ -97,8 +101,12 @@ pub struct DetailActions {
     /// 详情面板只展示焦点行，但「移动…」这类批量动作要动整集——与右键菜单
     /// 「移动到分组 ›」同一口径（`list_delegate/mod.rs` 的 `selection_ids`）。
     pub selected_ids: Vec<String>,
+    /// 版本时间线当前选中版（None = 没点过，动作按「上一版」兜底）。
+    ///
+    /// 只在全局资产恢复动作里用：用户点 v1 节点后再点「恢复历史版本」，
+    /// 恢复的必须是 v1，而不是固定 `当前 - 1`。
+    pub selected_version: Option<i32>,
 }
-
 
 mod actions;
 mod banners;

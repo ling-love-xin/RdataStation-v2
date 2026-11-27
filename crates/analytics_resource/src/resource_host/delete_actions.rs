@@ -16,8 +16,9 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
             return;
         }
 
-        // 文案按归档粒度区分本体命运（§12.1.1 ③）：copy 搬副本进回收站；reference 本体
-        // 留原位、只删登记行。混合时分组说清各有几项。
+        // 2026-11-27 文件 CAS：文件型资产不再自动“解锁退回草稿”；删除统一进回收站
+        // （软删登记 + 本体进 `.RSmeta/trash`）。取回是独立动作，不借删除入口。
+        let trash_ids: Vec<String> = targets.iter().map(|t| t.id.clone()).collect();
         let copy_count = targets
             .iter()
             .filter(|t| t.mode == PayloadMode::Copy)
@@ -34,8 +35,6 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
             1 => "移入回收站？".to_string(),
             count => format!("移入回收站（{count} 项）？"),
         };
-
-        let ids: Vec<String> = targets.iter().map(|t| t.id.clone()).collect();
         let backend = host.backend.clone();
         let read_only = host.read_only();
         // 回收站是**项目级**的（与草稿箱共用 `.RSmeta/trash`）：搬本体与软删登记行
@@ -43,7 +42,7 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             let backend = backend.clone();
             let root = root.clone();
-            let ids = ids.clone();
+            let trash_ids = trash_ids.clone();
             alert
                 .confirm()
                 .title(title.clone())
@@ -55,7 +54,9 @@ pub(super) fn request_delete(host: &ResourceHost, targets: &[DeleteTarget], wind
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _window, cx| {
-                    resource_jobs::enqueue_trash(root.clone(), read_only, ids.clone());
+                    if !trash_ids.is_empty() {
+                        resource_jobs::enqueue_trash(root.clone(), read_only, trash_ids.clone());
+                    }
                     backend.refresh_resources(cx);
                     say(&backend, "资产库：正在移入回收站…", cx);
                     true

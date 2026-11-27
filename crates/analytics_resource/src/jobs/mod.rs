@@ -19,11 +19,13 @@
 
 mod archive;
 pub(crate) mod global;
+mod file_gc;
 mod index;
-mod rename;
-mod tag;
 mod refresh;
-mod version;
+mod rename;
+mod table_gc;
+mod tag;
+pub(crate) mod version;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -40,24 +42,30 @@ use crate::preview::{self, Preview};
 use crate::resource_view::{ArchiveRow, GroupOption, ResourcesSnapshot};
 use crate::{
     AnalyticsResource, AnalyticsResourceStore, ArchiveKind, ArchiveService, ArchiveStatus,
-    ArchiveUndo, IndexIssue, IndexRepair, KeepVersions,
+    ArchiveUndo, IndexIssue, IndexRepair,
 };
 
+use self::refresh::run_refresh;
 use archive::{
     ArchiveJob, CheckoutJob, TrashActionJob, TrashJob, TrashListJob, UndoJob, load_trash,
     reload_trash_after, run_archive, run_checkout, run_trash, run_trash_action, run_undo,
 };
-use global::{DeleteGlobalJob, DistributeJob, PromoteJob, ReferenceGlobalJob, SolidifyRefJob, run_delete_global, run_distribute, run_promote, run_reference, run_solidify};
+use global::{
+    DeleteGlobalJob, DistributeJob, ForkGlobalTableAssetJob, GlobalCheckoutJob, PromoteJob,
+    ReferenceGlobalJob, RestoreGlobalVersionJob, SolidifyRefJob, run_delete_global, run_distribute,
+    run_fork_global_table_asset, run_promote, run_reference, run_restore_global_version,
+    run_solidify,
+};
 use index::{
     IndexRepairActionJob, IndexScanJob, load_index_report, reload_index_scan_after,
     run_repair_action,
 };
 use rename::{RenameJob, SetAliasJob, run_rename, run_set_alias};
+use table_gc::{GC_INTERVAL, run_table_gc};
 use tag::{
     GroupActionJob, TagActionJob, TagListJob, load_tag_rows, reload_tag_rows_after,
     run_group_action, run_tag_action,
 };
-use self::refresh::run_refresh;
 use version::{
     VersionActionJob, VersionDiffJob, VersionsJob, load_version_diff, load_versions,
     reload_versions_after, run_version_action,
@@ -66,7 +74,7 @@ use version::{
 /// 对外（面板 / 宿主）直接引用的行模型类型：由领域文件定义、这里 re-export。
 pub use index::IndexScanRows;
 pub use tag::TagRows;
-pub use version::{VersionDiffRows, VersionRows};
+pub use version::{VersionDiffRows, VersionRows, version_file};
 
 /// 连接池大小：与其它项目库访问点一致（`data_source_service` / `workspace_loader` 同为 4）。
 pub(crate) const SQLITE_POOL_SIZE: usize = 4;
@@ -79,6 +87,7 @@ pub(crate) enum Job {
     Refresh(RefreshJob),
     Archive(ArchiveJob),
     Checkout(CheckoutJob),
+    GlobalCheckout(GlobalCheckoutJob),
     Undo(UndoJob),
     Trash(TrashJob),
     Versions(VersionsJob),
@@ -94,10 +103,12 @@ pub(crate) enum Job {
     Rename(RenameJob),
     SetAlias(SetAliasJob),
     Promote(PromoteJob),
+    ForkGlobalTableAsset(ForkGlobalTableAssetJob),
     Distribute(DistributeJob),
     Reference(ReferenceGlobalJob),
     Solidify(SolidifyRefJob),
     DeleteGlobal(DeleteGlobalJob),
+    RestoreGlobalVersion(RestoreGlobalVersionJob),
 }
 
 pub enum OpOutcome {
@@ -114,6 +125,13 @@ pub enum OpOutcome {
     },
     /// 已取回：落地路径 / 存档版本 / 是否要顺手打开。
     CheckedOut {
+        dest: PathBuf,
+        version: i32,
+        open_after: bool,
+    },
+    /// 已从全局文件取回：资产名 / 落到本项目草稿箱的绝对路径 / 取回的全局版本。
+    GlobalCheckedOut {
+        name: String,
         dest: PathBuf,
         version: i32,
         open_after: bool,
@@ -152,13 +170,32 @@ pub enum OpOutcome {
     },
     /// 已把引用版本固化成独立本地资产：新资产名 / 本地版本。
     Solidified { name: String, version: i32 },
-    /// 已从全局实例删除：资产名 / 版本数 / 表数 / 曾分发过的项目数
+    /// 已移入全局回收站：资产名 / 被移入的那一版。
+    GlobalTrashed { name: String, version: i32 },
+    /// 已从全局实例永久删除：资产名 / 版本数 / 表数 / 曾分发过的项目数
     /// （回执要说明"这些项目里的副本还在"）。
     GlobalDeleted {
         name: String,
         versions: usize,
         tables: usize,
         projects: usize,
+    },
+    /// 已从全局文件历史版本恢复：资产名 / 来源版本 / 新生成的版本。
+    GlobalVersionRestored {
+        name: String,
+        from_version: i32,
+        version: i32,
+    },
+    /// 已把过期发布分叉成新资产：新资产名 / 新链版本（v1）。
+    Forked { name: String, version: i32 },
+    /// 发布基准过期：原请求不能追加到 head，需用户确认分叉或放弃。
+    ///
+    /// `base` = 发布者看到的版本（None = 当时还没有全局同名资产）；`head` = 全局当前版本。
+    StaleBase {
+        request: crate::global::PromoteRequest,
+        name: String,
+        base: Option<i32>,
+        head: i32,
     },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed {
@@ -305,12 +342,22 @@ fn handle_job(rt: &tokio::runtime::Runtime, job: Job) {
             Job::Refresh(job) => {
                 let result = rt.block_on(run_refresh(&job));
                 *lock(&jobs().result) = Some(result);
+            let root = if job.read_only {
+                None
+            } else {
+                Some(job.project_root.clone())
+            };
+            maybe_run_table_gc(&rt, root);
             }
             Job::Archive(job) => {
                 let outcome = rt.block_on(run_archive(&job));
                 *lock(&jobs().op_result) = Some(outcome);
                 // 动作之后立刻补一次取数（见模块头注释）。
                 refresh_after_op(&rt, job.project_root, job.read_only);
+            }
+            Job::GlobalCheckout(job) => {
+                let outcome = rt.block_on(global::run_global_checkout(&job));
+                *lock(&jobs().op_result) = Some(outcome);
             }
             Job::Checkout(job) => {
                 let outcome = rt.block_on(run_checkout(&job));
@@ -413,6 +460,12 @@ fn handle_job(rt: &tokio::runtime::Runtime, job: Job) {
                 // 升级只动全局库，项目列表不变，但重取无妨（同一 worker，成本可控）。
                 refresh_after_op(&rt, job.project_root, false);
             }
+        Job::ForkGlobalTableAsset(job) => {
+            let outcome = rt.block_on(run_fork_global_table_asset(&job));
+            *lock(&jobs().op_result) = Some(outcome);
+            // 新资产进全局分区：重取一次快照。
+            refresh_after_op(&rt, job.project_root, false);
+        }
             Job::Distribute(job) => {
                 let outcome = rt.block_on(run_distribute(&job));
                 *lock(&jobs().op_result) = Some(outcome);
@@ -437,7 +490,48 @@ fn handle_job(rt: &tokio::runtime::Runtime, job: Job) {
                 // 全局行从项目面板的「全局」分区消失：重取一次快照。
                 refresh_after_op(&rt, job.project_root, false);
             }
+            Job::RestoreGlobalVersion(job) => {
+                let outcome = rt.block_on(run_restore_global_version(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 恢复生成新的全局版本：全局分区要重取一次。
+                refresh_after_op(&rt, job.project_root, false);
+            }
+    }
+}
+
+/// 刷新后按小时节流跑一轮快照 GC；第一次刷新也跑（启动即清一次孤儿）。
+fn maybe_run_table_gc(rt: &tokio::runtime::Runtime, project_root: Option<PathBuf>) {
+    static LAST_GC: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+    let now = std::time::Instant::now();
+    {
+        let mut last = lock(LAST_GC.get_or_init(Default::default));
+        if last.is_some_and(|at| now.duration_since(at) < GC_INTERVAL) {
+            return;
         }
+        *last = Some(now);
+    }
+    let report = rt.block_on(run_table_gc(project_root.clone(), table_gc::GC_GRACE));
+    if report.dropped > 0 || report.failed > 0 {
+        tracing::info!(
+            marked = report.marked,
+            dropped = report.dropped,
+            kept = report.kept,
+            failed = report.failed,
+            "表快照 GC 完成"
+        );
+    }
+    // 同一节流拍里顺带回收文件 CAS：两者共用 24h grace，孤儿 manifest 被版本行
+    // 引用时永不删，所以不需要比表 GC 更频繁。
+    let cas = rt.block_on(file_gc::run_file_gc(project_root, table_gc::GC_GRACE));
+    if cas.manifests_removed > 0 || cas.blobs_removed > 0 || cas.staging_removed > 0 {
+        tracing::info!(
+            manifests = cas.manifests_removed,
+            blobs = cas.blobs_removed,
+            staging = cas.staging_removed,
+            bytes = cas.bytes_freed,
+            "文件 CAS GC 完成"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -459,7 +553,8 @@ pub use archive::{
     enqueue_undo,
 };
 pub use global::{
-    enqueue_delete_global, enqueue_distribute, enqueue_promote, enqueue_reference,
+    enqueue_delete_global, enqueue_distribute, enqueue_fork_global_table_asset,
+    enqueue_global_checkout, enqueue_promote, enqueue_reference, enqueue_restore_global_version,
     enqueue_solidify,
 };
 pub use index::enqueue_index_repair_action;
@@ -470,9 +565,9 @@ pub use tag::{
 };
 pub use version::{enqueue_version_action, enqueue_version_diff, enqueue_versions};
 
-use self::refresh::{free_dest, open_service, refresh_after_op};
 #[cfg(test)]
 use self::refresh::collision_name;
+use self::refresh::{free_dest, open_service, open_service_with_manager, refresh_after_op};
 
 pub use self::refresh::{
     drain_index_scan, drain_op, drain_snapshot, drain_tag_rows, drain_trash_rows,

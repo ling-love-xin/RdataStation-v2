@@ -48,6 +48,10 @@ pub struct ArchiveDetail {
     /// 详情「基本信息」摆它（用户需要知道本体落在哪）；**取回**也用它推默认工作副本名
     /// （显示名与扩展名是两回事：显示名可以改成中文，扩展名不行）。
     pub payload_rel_path: Option<String>,
+    /// 本体能否被 DuckDB 直接读成表（`structured` 列的能力事实）。
+    ///
+    /// 打开 / 查看统计按它路由，**不再按扩展名猜**：`true` → 只读取样；`false` → 编辑器只读。
+    pub duckdb_readable: bool,
     /// 本体表名（**表型资产的取数依据**：`kind = AnalyticsTable` 时它是分析库里的表名）。
     ///
     /// 文件型为 `None`。详情「基本信息」摆它（表名是拿来拼 SQL 的定位信息，不给就没法照抄）；
@@ -92,6 +96,11 @@ pub struct ArchiveDetail {
     /// 空 = 不显示这一行：项目行没有「被谁用过」这个概念（它的来源在 `promoted_from`），
     /// 全局行没人分发过也不该占一行。
     pub dispatch_label: String,
+    /// 活跃取回（检出）的说明，如 "已取回：草稿箱/月报（工作副本）.sql（基准 v3）"。
+    ///
+    /// `None` = 当前没有把内容取到草稿箱。同一资产同时只允许一条 active 租约：
+    /// 详情摆出来，用户才知道外面已有一份待归档的草稿，不会对「再取回为什么被拒」发懵。
+    pub checkout_label: Option<String>,
 }
 
 impl ArchiveDetail {
@@ -112,6 +121,7 @@ impl ArchiveDetail {
             // 本名不可改（只能改项目别名）。
             global_ref: matches!(self.kind, crate::ArchiveKind::TableRef)
                 && self.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL),
+            selected_version: None,
         }
     }
 }
@@ -143,10 +153,10 @@ pub struct DetailVersionLine {
     pub hash_short: String,
     /// 相对上一版的差异文案（`较 v2 大小+1.2 KB · 指纹已变`；最旧一版为空）。
     pub delta_label: String,
-    /// 这一版还有没有内容副本（`.RSmeta/resources/versions/<id>/<v>/`）。
+    /// 这一版还有没有 manifest（`file_asset_versions`）。
     ///
-    /// 裁剪**只删副本、不删版本行**，所以“有这一版”和“能还原它”是两件事：
-    /// 缺副本时渲染层要明说，否则用户点「还原」只会得到一句失败。
+    /// 旧版文件副本已删除，所以“有这一版”和“能从 manifest 还原它”是两件事：
+    /// 缺 manifest 时渲染层要明说，否则用户点「还原」只会得到一句失败。
     pub has_copy: bool,
     /// 本体是不是项目分析库里的一张表（表型资产没有副本文件，回退 = 改指向）。
     pub is_table: bool,

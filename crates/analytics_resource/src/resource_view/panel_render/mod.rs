@@ -119,6 +119,12 @@ impl Render for ResourcesPanel {
                             .iter()
                             .map(|id| DeleteTarget {
                                 id: id.clone(),
+                                kind: panel
+                                    .snapshot
+                                    .details
+                                    .get(id)
+                                    .map(|detail| detail.kind)
+                                    .unwrap_or(ArchiveKind::File),
                                 mode: panel
                                     .snapshot
                                     .details

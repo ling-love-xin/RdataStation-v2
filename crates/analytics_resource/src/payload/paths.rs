@@ -16,19 +16,16 @@ impl PayloadStore {
     pub fn resources_dir(&self) -> PathBuf {
         self.project_root.join(RESOURCES_DIR_NAME)
     }
+    /// 草稿箱根：`{项目}/scratchpad/`（取回目标的默认落点）。
+    pub fn scratchpad_dir(&self) -> PathBuf {
+        self.project_root.join(SCRATCHPAD_DIR_NAME)
+    }
     /// 项目级回收站（`.RSmeta/trash/`）：本体删除与还原走它（原型 §4.7）。
     ///
     /// 回收站是**整个项目**的（草稿箱与资产库共用），所以它不认识 `resources/`——
     /// 调用方给绝对路径与 `origin` 标记，还原目标根也由调用方指定。
     pub fn trash(&self) -> engine::persistence::trash::ProjectTrash {
         engine::persistence::trash::ProjectTrash::new(&self.project_root)
-    }
-    /// 历史内容副本根：`{项目}/.RSmeta/resources/versions/`。
-    pub(super) fn versions_dir(&self) -> PathBuf {
-        self.project_root
-            .join(META_DIR_NAME)
-            .join(RESOURCES_DIR_NAME)
-            .join(VERSIONS_DIR_NAME)
     }
     /// 建目录（首次归档时调用；幂等）。
     pub async fn ensure_dir(&self) -> Result<(), CoreError> {

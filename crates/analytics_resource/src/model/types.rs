@@ -39,8 +39,6 @@ pub struct ArchiveRequest {
     pub tags: Vec<String>,
     /// 归入分组（可空）。
     pub group_id: Option<String>,
-    /// 历史内容保留策略；`None` = 跟随设置默认（架构 §5.2）。
-    pub keep_versions: Option<KeepVersions>,
     /// 再归档时由上游带回的来源存档 id（取回后改完再归档，见架构 §6.4）。
     ///
     /// `None` = 首次归档（新存档）；`Some` 时命中已有存档：内容指纹未变则不产生新版本。
@@ -82,6 +80,8 @@ pub struct TagTarget {
 pub struct DeleteTarget {
     /// 存档 id。
     pub id: String,
+    /// 资产形态：文件型不能直接删除，只能解锁退回草稿箱。
+    pub kind: ArchiveKind,
     /// 归档粒度（视图从详情快照取；缺省回退 `Copy`）。
     pub mode: PayloadMode,
 }
@@ -127,6 +127,11 @@ pub struct CheckoutOutcome {
     pub version: i32,
     /// 落地的草稿绝对路径。
     pub dest_path: PathBuf,
+    /// 这一版随 manifest 存档的文件元数据；旧资产或无 sidecar 时为 `None`。
+    ///
+    /// 服务层只负责“读出来交回去”；落成草稿箱 sidecar 由宿主按自己的目录约定写，
+    /// 依赖方向仍然是 `workbench → analytics_resource`。
+    pub file_meta: Option<file_meta::FileMeta>,
 }
 
 /// 回收站条目的来源标记：本模块（原型 §4.7）。

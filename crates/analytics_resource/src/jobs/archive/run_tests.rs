@@ -10,11 +10,10 @@ use tokio::fs;
 use super::*;
 use crate::model::{ArchiveBinding, ArchiveKind, ArchiveRequest, CheckoutRequest, PayloadMode};
 use crate::store::checkout_receipt::normalize_dest;
-use crate::KeepVersions;
 
 async fn env() -> (ArchiveService, PathBuf) {
     let (store, dir) = crate::tests::create_test_store().await;
-    let service = ArchiveService::new(&dir, store).with_keep_versions(KeepVersions::All);
+    let service = ArchiveService::new(&dir, store);
     (service, dir)
 }
 
@@ -25,7 +24,11 @@ fn archive_job(root: &Path, source: PathBuf, rel: &str) -> ArchiveJob {
         request: ArchiveRequest {
             source_path: source,
             rel_path: rel.to_string(),
-            name: "dau".to_string(),
+            name: Path::new(rel)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("dau")
+                .to_string(),
             alias: None,
             kind: ArchiveKind::File,
             payload_mode: PayloadMode::Copy,
@@ -33,11 +36,9 @@ fn archive_job(root: &Path, source: PathBuf, rel: &str) -> ArchiveJob {
             binding: ArchiveBinding::default(),
             tags: Vec::new(),
             group_id: None,
-            keep_versions: None,
             // 关键：UI 这一侧仍然是 None——是作业层反查凭据后才决定升版。
             existing_resource_id: None,
         },
-        keep_versions: KeepVersions::All,
         analysis_probe: false,
         assertion: None,
     }

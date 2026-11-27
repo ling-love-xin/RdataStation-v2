@@ -88,8 +88,8 @@ impl SecretManager {
     ///
     /// **载体用内存连接**（2026-10-03 修复）：DuckDB 的 `PERSISTENT` Secret 实际落盘在
     /// `secret_directory`（独立文件），与主库文件无关；若用 `Connection::open(db_path)`
-    /// 打开目标分析库文件，会与运行中持有该文件的连接（`GlobalDatabaseManager` /
-    /// `ProjectDatabaseManager` / `DuckDBManager`）撞 Windows 文件锁
+    /// 打开目标分析库文件，会与运行中持有该文件的根连接（`shared::duckdb_root`；
+    /// `ProjectDatabaseManager` / `GlobalDatabaseManager` 的会话都出自它）撞 Windows 文件锁
     /// （`File is already open`，实测：项目侧注册全挂、全局侧生产同样会挂）。
     /// 内存连接 + 显式 `secret_directory` 即可读写同一份 Secret 存储，不碰文件句柄。
     pub fn open_with_dir(

@@ -288,7 +288,7 @@ impl ScratchpadView {
         // 回收站共享固定高度）随该模式移除：高度改由 flex 分配，不再需要限高把手。
         // 书签分区顺序按用户口径：草稿 → 书签 → 引用 → 回收站。
         let bookmarks_section = self.render_scratchpad_bookmarks_section(cx);
-        let (refs_section, trash_section) = self.render_scratchpad_refs_and_trash(cx);
+        let (refs_section, trash_section) = self.render_scratchpad_refs_and_trash(window, cx);
         panel = panel
             .child(bookmarks_section)
             .child(refs_section)
@@ -715,12 +715,16 @@ impl ScratchpadView {
     ///
     /// 为什么单独成方法：`render_scratchpad` 是面板唯一主视图，接近千行——把与「数据从哪来」
     /// 无关的两块搬出来，主视图只剩装配顺序。
-    fn render_scratchpad_refs_and_trash(&self, cx: &mut Context<Self>) -> (Div, Div) {
+    fn render_scratchpad_refs_and_trash(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Div, Div) {
         let theme = cx.theme();
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
         let _primary = theme.colors.primary;
-        let _hover_bg = theme.colors.list_hover;
+        let hover_bg = theme.colors.list_hover;
         // 分组头底色由 `tree::GroupHeader` 统一决定（`group_box`，与搜索行同一档）。
         let ref_color = theme.colors.info;
         let _info = theme.colors.info;
@@ -997,6 +1001,30 @@ impl ScratchpadView {
                 trash_head = trash_head.hover_action(btn);
             }
             let trash_head = trash_head.on_click(toggle_trash);
+            // 资产库条目也走这一个回收站：分区底部给一条入口，打开资产库的回收站对话框。
+            // 资产库面板不再单独摆「回收站…」，这里是唯一入口。
+            let asset_trash_row = self.host.can_open_asset_trash().then(|| {
+                let host = self.host.clone();
+                div()
+                    .id("sp-trash-assets-entry")
+                    .debug_selector(|| "sp-trash-assets-entry".to_string())
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .w_full()
+                    .h(rems(ui::ROW_HEIGHT_COMPACT))
+                    .px_1p5()
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover_bg))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(tr("资产库归档…")),
+                    )
+                    .on_click(move |_, window, cx| host.open_asset_trash(window, cx))
+            });
             trash_section = div()
                 .v_flex()
                 .w_full()
@@ -1004,6 +1032,7 @@ impl ScratchpadView {
                 .when(trash_expanded, |s| s.flex_1())
                 .when(!trash_expanded, |s| s.flex_none())
                 .child(trash_head)
+                .children(asset_trash_row)
                 .child(
                     Collapsible::new()
                         .open(trash_expanded)

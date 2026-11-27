@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use engine::persistence::project_db::ProjectDatabaseManager;
+use rusqlite::OptionalExtension;
 
 use shared::error::{CommonError, CoreError};
 
@@ -16,8 +17,20 @@ use super::{ConflictContext, Job, OpOutcome, SQLITE_POOL_SIZE, jobs};
 pub(crate) struct PromoteJob {
     pub(crate) project_root: PathBuf,
     pub(crate) request: crate::global::PromoteRequest,
-    /// true = 同名冲突经「覆盖」确认后重入队（旧表删、版本接续）。
+    /// true = 同名冲突经「覆盖」确认后重入队（head 版本接续）；
+    /// 显式 `base_global_version` 由作业层转成 base。
     pub(crate) overwrite: bool,
+}
+
+/// 一次「发布基准过期 → 分叉为新资产」任务。
+///
+/// 发布者用完 `base_global_version` 时全局 head 已前进，不能静默覆盖；
+/// 用户确认分叉后，以父资产**当前 head**为 v1 零复制起点建一条新链。
+pub(crate) struct ForkGlobalTableAssetJob {
+    pub(crate) project_root: PathBuf,
+    pub(crate) parent_name: String,
+    pub(crate) parent_version: i32,
+    pub(crate) fork_name: String,
 }
 
 /// 一次「从全局分发」任务（§13：全局 → 项目；跨项目唯一法定路径）。
@@ -28,6 +41,17 @@ pub(crate) struct DistributeJob {
     pub(crate) target: Option<String>,
     /// true = 同名冲突经「覆盖」确认后重入队（旧本体移除、登记软删）。
     pub(crate) overwrite: bool,
+}
+
+/// 一次「从全局文件取回」任务：把全局 CAS 的选定版本物化到项目草稿箱，并写两侧租约。
+pub(crate) struct GlobalCheckoutJob {
+    pub(crate) project_root: PathBuf,
+    pub(crate) name: String,
+    /// 取回的全局版本（列表 / 详情看到的那一版）。
+    pub(crate) version: i32,
+    /// 相对草稿箱的路径（只给文件名时落在草稿箱根部）。
+    pub(crate) dest_rel: String,
+    pub(crate) open_after: bool,
 }
 
 /// 一次「从全局实例删除」任务（刀 B；只清全局这一份，已分发副本不动）。
@@ -55,7 +79,17 @@ pub(crate) struct SolidifyRefJob {
     pub(crate) target: String,
 }
 
-/// 删除全局资产（工作线程上执行）。
+/// 一次「恢复全局历史版本」任务：表型复制旧表，文件型复制旧副本，都生成新版本。
+pub(crate) struct RestoreGlobalVersionJob {
+    pub(crate) project_root: PathBuf,
+    pub(crate) name: String,
+    /// 要恢复的历史版本号。
+    pub(crate) version: i32,
+    /// true = 表型（`restore_global_table_version`），false = 文件型。
+    pub(crate) table: bool,
+}
+
+/// 把全局资产移入回收站（工作线程上执行）。
 pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
     use crate::global::GlobalInstanceStore;
 
@@ -63,20 +97,155 @@ pub(crate) async fn run_delete_global(job: &DeleteGlobalJob) -> OpOutcome {
         Ok(store) => store,
         Err(reason) => {
             return OpOutcome::Failed {
-                action: "删除全局资产",
+                action: "移入全局回收站",
                 reason: format!("打开全局系统库失败：{reason}"),
             };
         }
     };
-    match gstore.delete_global(&job.name).await {
-        Ok(outcome) => OpOutcome::GlobalDeleted {
+    match gstore.trash_global(&job.name).await {
+        Ok(outcome) => OpOutcome::GlobalTrashed {
             name: outcome.name,
-            versions: outcome.versions,
-            tables: outcome.tables,
-            projects: outcome.projects,
+            version: outcome.version,
         },
         Err(reason) => OpOutcome::Failed {
-            action: "删除全局资产",
+            action: "移入全局回收站",
+            reason: reason.to_string(),
+        },
+    }
+}
+
+/// 从全局文件取回（工作线程上执行）。
+///
+/// 只开项目 SQLite 池写租约；内容从全局 CAS 物化，不经过项目 DuckDB。
+pub(crate) async fn run_global_checkout(job: &GlobalCheckoutJob) -> OpOutcome {
+    use crate::global::GlobalInstanceStore;
+
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "从全局取回",
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    let manager = match ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE).await {
+        Ok(manager) => manager,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "从全局取回",
+                reason: format!("打开项目库失败：{reason}"),
+            };
+        }
+    };
+    let store = crate::store::AnalyticsResourceStore::new(manager.sqlite_pool());
+    match gstore
+        .checkout_file(
+            &store,
+            &job.project_root,
+            &job.name,
+            Some(job.version),
+            &job.dest_rel,
+        )
+        .await
+    {
+        Ok(outcome) => OpOutcome::GlobalCheckedOut {
+            name: outcome.name,
+            dest: job
+                .project_root
+                .join(crate::resource_host::SCRATCHPAD_DIR)
+                .join(&outcome.dest_rel),
+            version: outcome.version,
+            open_after: job.open_after,
+        },
+        Err(reason) => OpOutcome::Failed {
+            action: "从全局取回",
+            reason: reason.to_string(),
+        },
+    }
+}
+
+/// 提交一次全局文件取回（事件路径调用：对话框确认之后）。
+pub fn enqueue_global_checkout(
+    project_root: PathBuf,
+    name: String,
+    version: i32,
+    dest_rel: String,
+    open_after: bool,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::GlobalCheckout(GlobalCheckoutJob {
+        project_root,
+        name,
+        version,
+        dest_rel,
+        open_after,
+    }));
+}
+
+/// 发布基准过期后分叉：父资产当前 head 作为新资产 v1，零复制。
+pub(crate) async fn run_fork_global_table_asset(job: &ForkGlobalTableAssetJob) -> OpOutcome {
+    use crate::global::GlobalInstanceStore;
+
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "分叉全局表资产",
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    match gstore
+        .fork_global_table_asset(&job.parent_name, job.parent_version, &job.fork_name)
+        .await
+    {
+        Ok(outcome) => OpOutcome::Forked {
+            name: outcome.name,
+            version: outcome.version,
+        },
+        Err(reason) => OpOutcome::Failed {
+            action: "分叉全局表资产",
+            reason: reason.to_string(),
+        },
+    }
+}
+
+/// 从全局历史版本恢复（工作线程上执行）：表型复制旧表，文件型校验旧副本。
+pub(crate) async fn run_restore_global_version(job: &RestoreGlobalVersionJob) -> OpOutcome {
+    use crate::global::GlobalInstanceStore;
+
+    let action = if job.table {
+        "恢复全局表版本"
+    } else {
+        "恢复全局文件版本"
+    };
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action,
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    let result = if job.table {
+        gstore
+            .restore_global_table_version(&job.name, job.version)
+            .await
+    } else {
+        gstore
+            .restore_global_file_version(&job.name, job.version)
+            .await
+    };
+    match result {
+        Ok(outcome) => OpOutcome::GlobalVersionRestored {
+            name: outcome.name,
+            from_version: job.version,
+            version: outcome.version,
+        },
+        Err(reason) => OpOutcome::Failed {
+            action,
             reason: reason.to_string(),
         },
     }
@@ -100,22 +269,26 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
             };
         }
     };
-    let outcome = if job.request.source_table.is_some() {
-        // 表型：本体是项目分析库里的一张表。必须由项目自己的写连接整表导出，
-        // 再把导出的 parquet 按数据文件升级（见 `promote_table_from_project`）。
+    let outcome = if job.request.kind == crate::global::PromoteKind::File {
+        promote_file_first(&gstore, job).await
+    } else if job.request.source_table.is_some() {
+        // 表型：本体是项目分析库里的一张表。全局库与项目库同处一条根连接，
+        // 项目会话直接 CTAS 到 `rds_global.<版本表>`（见 `promote_table_from_project`）。
         match open_project_conn(&job.project_root).await {
             Ok(project) => {
-                promote_table_from_project(&gstore, &project, &job.request, job.overwrite).await
+                gstore
+                    .promote_table_from_project(&project, &job.request, job.overwrite)
+                    .await
             }
             Err(reason) => Err(InstanceOpError::Core(CoreError::common(
                 CommonError::General(reason),
             ))),
         }
     } else {
-        match job.overwrite {
-            true => gstore.promote_overwrite(&job.request).await,
-            false => gstore.promote(&job.request).await,
-        }
+        // 数据文件也直接冻结成全局表资产；旧「一版一行」建表路径已删除。
+        gstore
+            .promote_file_as_table_asset(&job.request, job.overwrite)
+            .await
     };
     let outcome = match outcome {
         Ok(outcome) => outcome,
@@ -124,6 +297,14 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
                 context: ConflictContext::Promote(job.request.clone()),
                 name,
                 field,
+            };
+        }
+        Err(InstanceOpError::StaleBase { name, base, head }) => {
+            return OpOutcome::StaleBase {
+                request: job.request.clone(),
+                name,
+                base,
+                head,
             };
         }
         Err(reason) => {
@@ -139,7 +320,81 @@ pub(crate) async fn run_promote(job: &PromoteJob) -> OpOutcome {
     }
 }
 
-/// 打开项目库并借一个写连接（表型升级要把项目表整表导出，必须由项目自己的连接做）。
+/// 文件-first 升级：从项目 `file_asset_versions` 取 manifest（没有则按源文件现算），
+/// 进全局 CAS；同名 head 存在时按 `base_global_version` 追加，绝不静默覆盖。
+async fn promote_file_first(
+    gstore: &crate::global::GlobalInstanceStore,
+    job: &PromoteJob,
+) -> Result<crate::global::PromoteOutcome, crate::global::InstanceOpError> {
+    let project = open_project_conn(&job.project_root)
+        .await
+        .map_err(|reason| {
+            crate::global::InstanceOpError::Core(CoreError::common(CommonError::General(reason)))
+        })?;
+
+    let (manifest_id, _source_hash, _source_size): (Option<String>, Option<String>, Option<i64>) =
+        match (&job.request.source_resource_id, job.request.source_version) {
+            (Some(id), Some(version)) => {
+                let conn = project.1.acquire().await.map_err(|error| {
+                    crate::global::InstanceOpError::Core(CoreError::common(CommonError::General(
+                        format!("借项目 SQLite 连接失败：{error}"),
+                    )))
+                })?;
+                let inner = conn.inner().map_err(|error| {
+                    crate::global::InstanceOpError::Core(CoreError::common(CommonError::General(
+                        format!("项目 SQLite 连接不可用：{error}"),
+                    )))
+                })?;
+                inner
+                    .query_row(
+                        "SELECT manifest_id, content_hash FROM file_asset_versions \
+                         WHERE resource_id = ?1 AND version = ?2",
+                        rusqlite::params![id, version],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .optional()
+                    .map_err(|error| {
+                        crate::global::InstanceOpError::Core(CoreError::common(
+                            CommonError::General(format!("读项目文件版本失败：{error}")),
+                        ))
+                    })?
+                    .map(|(manifest, hash)| (Some(manifest), Some(hash), None))
+                    .unwrap_or((None, None, None))
+            }
+            _ => (None, None, None),
+        };
+
+    let base_global_version = if job.overwrite {
+        gstore
+            .current_file_head(&job.request.name)
+            .map_err(crate::global::InstanceOpError::Core)?
+    } else {
+        None
+    };
+    let published = gstore
+        .publish_file(&crate::global::PublishFileRequest {
+            name: job.request.name.clone(),
+            source_project_root: job.project_root.clone(),
+            manifest_id,
+            source_abs_path: Some(job.request.source_abs_path.clone()),
+            rel_path: job.request.rel_path.clone(),
+            source_resource_id: job.request.source_resource_id.clone(),
+            source_version: job.request.source_version,
+            base_global_version,
+        })
+        .await?;
+
+    Ok(crate::global::PromoteOutcome {
+        resource_id: published.resource_id,
+        name: published.name,
+        version: published.version,
+        row_count: None,
+        column_count: None,
+        overwritten: base_global_version.is_some(),
+    })
+}
+
+/// 打开项目库并借一个写连接（表型升级的 CTAS 要在项目会话上执行）。
 async fn open_project_conn(
     project_root: &std::path::Path,
 ) -> Result<crate::global::ProjectDuckConn, String> {
@@ -149,84 +404,14 @@ async fn open_project_conn(
     let Some(duckdb) = manager.duckdb_conn() else {
         return Err("项目 DuckDB 写连接未就绪".to_string());
     };
-    let duck_conn = duckdb.acquire().await.map_err(|reason| reason.to_string())?;
-    Ok(crate::global::ProjectDuckConn(duck_conn, manager.sqlite_pool()))
-}
-
-/// 表型升级：项目表 → 临时 parquet → 全局表（**整表搬运**）。
-///
-/// 为什么要绕一步 parquet：全局 DuckDB 与项目 DuckDB 都是单写者，Windows 单句柄下
-/// 互相 `ATTACH` 会撞「文件被占用」（分发侧已踩过，见 `distribute` 的注释）。
-/// 项目连接自己 `COPY ... TO` 是安全的，而且 **`COPY` 不带 LIMIT**——整表搬，
-/// 不采样：资产库要跨项目比版本，不允许「这次只有前一万行」。
-///
-/// 半成品清理：`COPY` 失败留下的是半截 parquet，升级失败留下的是已建的全局表
-/// （`promote` 内部按分支清），这里统一负责临时文件那一步。
-pub(crate) async fn promote_table_from_project(
-    gstore: &crate::global::GlobalInstanceStore,
-    project: &crate::global::ProjectDuckConn,
-    req: &crate::global::PromoteRequest,
-    overwrite: bool,
-) -> Result<crate::global::PromoteOutcome, crate::global::InstanceOpError> {
-    use crate::global::{InstanceOpError, PromoteKind, quote_ident};
-
-    let Some(table) = req.source_table.as_deref() else {
-        return Err(InstanceOpError::Core(CoreError::common(
-            CommonError::General("升级请求缺少源表名".to_string()),
-        )));
-    };
-
-    let tmp_dir = paths::temp_dir();
-    std::fs::create_dir_all(&tmp_dir)
-        .map_err(|e| {
-            InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                "创建临时目录失败（{}）：{e}",
-                tmp_dir.display()
-            ))))
-        })?;
-    let tmp = tmp_dir.join(format!(
-        "rds_promote_{}.parquet",
-        uuid::Uuid::new_v4().simple()
-    ));
-    let copy_sql = format!(
-        "COPY {} TO '{}' (FORMAT PARQUET);",
-        quote_ident(table),
-        tmp.to_string_lossy().replace('\\', "/")
-    );
-
-    let copy_result = {
-        let mut guard = project.0.lock().await;
-        match guard.as_mut() {
-            Some(conn) => conn.execute_batch(&copy_sql).map_err(|e| {
-                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                    "导出项目表 {table} 失败：{e}"
-                ))))
-            }),
-            None => Err(InstanceOpError::Core(CoreError::common(
-                CommonError::General("项目 DuckDB 连接已关闭".to_string()),
-            ))),
-        }
-    };
-    if let Err(error) = copy_result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(error);
-    }
-
-    // 导出的 parquet 就是「数据文件」：形态判定、全量建表、指纹都不必另走一套。
-    let mut effective = req.clone();
-    effective.kind = PromoteKind::DataFile;
-    effective.source_abs_path = tmp.clone();
-    // 表已经搬成文件了：源表名与重建目标都不再需要。
-    effective.source_table = None;
-    effective.rel_path = None;
-
-    let result = match overwrite {
-        true => gstore.promote_overwrite(&effective).await,
-        false => gstore.promote(&effective).await,
-    };
-    // 全局表建好之后这份 parquet 就没用了（数据已在全局库里）。
-    let _ = std::fs::remove_file(&tmp);
-    result
+    let duck_conn = duckdb
+        .acquire()
+        .await
+        .map_err(|reason| reason.to_string())?;
+    Ok(crate::global::ProjectDuckConn(
+        duck_conn,
+        manager.sqlite_pool(),
+    ))
 }
 
 /// 从全局分发到当前项目（工作线程上执行；§13 跨项目唯一法定路径）。
@@ -298,8 +483,7 @@ pub(crate) async fn run_distribute(job: &DistributeJob) -> OpOutcome {
     if let Ok(outcome) = &result {
         match gstore.latest_global_id(&job.name).await {
             Ok(Some(global_id)) => {
-                let store =
-                    crate::store::AnalyticsResourceStore::new(manager.sqlite_pool());
+                let store = crate::store::AnalyticsResourceStore::new(manager.sqlite_pool());
                 if let Err(error) = store
                     .record_derived_from(&outcome.resource_id, &global_id)
                     .await
@@ -504,6 +688,42 @@ pub fn enqueue_distribute(
         target,
         overwrite,
     }));
+}
+
+/// 提交一次「发布基准过期 → 分叉为新资产」。
+pub fn enqueue_fork_global_table_asset(
+    project_root: PathBuf,
+    parent_name: String,
+    parent_version: i32,
+    fork_name: String,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs()
+        .tx
+        .send(Job::ForkGlobalTableAsset(ForkGlobalTableAssetJob {
+            project_root,
+            parent_name,
+            parent_version,
+            fork_name,
+        }));
+}
+
+/// 提交一次「恢复全局历史版本」。
+pub fn enqueue_restore_global_version(
+    project_root: PathBuf,
+    name: String,
+    version: i32,
+    table: bool,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs()
+        .tx
+        .send(Job::RestoreGlobalVersion(RestoreGlobalVersionJob {
+            project_root,
+            name,
+            version,
+            table,
+        }));
 }
 
 /// 提交一次「从全局实例删除」（刀 B；确认框之后）。

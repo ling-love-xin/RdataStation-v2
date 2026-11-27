@@ -1,8 +1,8 @@
 //! 动作区：全局行只给「分发到本项目」；项目行给打开 / 取回 / 危险区。
 
-use shared::i18n::tr;
 use super::*;
 use gpui_kit::prelude::FluentBuilder as _;
+use shared::i18n::tr;
 
 /// 全局行的分发按钮：`(是否可点, 按钮下方那句说明)`。
 ///
@@ -43,7 +43,9 @@ pub(super) fn render_actions(
     if let Some(actions) = actions {
         let host = actions.host.clone();
         // 动作判据统一在 `model::affordance`（详情恒单选，`multi_count` 给 1）。
-        let ctx = detail.action_context(actions.read_only, 1);
+        let mut ctx = detail.action_context(actions.read_only, 1);
+        // 时间线选中版只属于这一次渲染，不回写模型上下文。
+        ctx.selected_version = actions.selected_version;
         // 来源链（刀 C）：有直接上游才摆入口（没有上游时按也没内容可看）。
         if detail.origin_kind.is_some() {
             let detail_for_chain = detail.clone();
@@ -64,11 +66,25 @@ pub(super) fn render_actions(
         if detail.scope == RowScope::Global {
             let detail_for_distribute = detail.clone();
             let detail_for_delete = detail.clone();
+            let detail_for_restore = detail.clone();
             // 分发要往本项目库写表：只读项目 / 本体缺失都挡住（与列表右键菜单同一判据）。
             let (can_distribute, distribute_hint) = distribute_affordance(&ctx);
             // 引用只认表型全局资产：文件型暂时没有引用语义（分发仍可复制一份）。
             let is_file_global = detail.payload_rel_path.is_some();
             let can_reference = can_distribute && !is_file_global;
+            let is_table_global = !is_file_global
+                    && detail.kind == crate::ArchiveKind::AnalyticsTable
+                    && !detail.analytics_table.as_deref().unwrap_or("").is_empty();
+            // 时间线选中了某版就恢复那版；没选过仍按「上一版」兜底。
+            let restore_from = ctx
+                .selected_version
+                .filter(|version| *version >= 1 && *version < detail.version);
+            let can_restore_file = is_file_global
+                && (detail.version > 1 || restore_from.is_some())
+                && ctx.status != ArchiveStatus::Missing;
+            let can_restore_table = is_table_global
+                && (detail.version > 1 || restore_from.is_some())
+                && ctx.status != ArchiveStatus::Missing;
             let can_delete_global = crate::model::can_delete_global(&ctx);
             out.push(
                 div()
@@ -107,6 +123,7 @@ pub(super) fn render_actions(
                                     .disabled(!can_distribute)
                                     .on_click({
                                         let host = host.clone();
+                                        let detail_for_distribute = detail_for_distribute.clone();
                                         move |_, window, cx| {
                                             host.request_distribute_from_global(
                                                 &detail_for_distribute.name,
@@ -115,10 +132,52 @@ pub(super) fn render_actions(
                                             )
                                         }
                                     }),
-                            ),
+                            )
+                            .when(is_file_global, |row| {
+                                row.child(
+                                    Button::new("archive-detail-restore-global-version")
+                                        .ghost()
+                                        .label(tr("恢复历史文件版本…"))
+                                        .disabled(!can_restore_file)
+                                        .on_click({
+                                            let host = host.clone();
+                                            let detail_for_restore = detail_for_restore.clone();
+                                            move |_, window, cx| {
+                                                host.request_restore_global_previous(
+                                                    &detail_for_restore,
+                                                    restore_from,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }
+                                        }),
+                                )
+                            })
+                            .when(is_table_global, |row| {
+                                row.child(
+                                    Button::new("archive-detail-restore-global-table-version")
+                                        .ghost()
+                                        .label(tr("恢复历史表版本…"))
+                                        .disabled(!can_restore_table)
+                                        .on_click({
+                                            let host = host.clone();
+                                            let detail_for_restore = detail_for_restore.clone();
+                                            move |_, window, cx| {
+                                                host.request_restore_global_previous(
+                                                    &detail_for_restore,
+                                                    restore_from,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }
+                                        }),
+                                )
+                            }),
                     )
                     .child(div().text_xs().text_color(muted).child(if is_file_global {
-                        tr("文件型全局资产暂不支持引用；分发会复制一份到本项目")
+                        tr("文件型全局资产暂不支持引用；分发会复制一份到本项目。历史文件已留副本，可用「恢复上一版文件」生成新版本")
+                    } else if is_table_global {
+                        tr("历史版本的表仍在全局库；「恢复上一版表」会复制旧表生成新版本，不原地换回")
                     } else if can_reference {
                         tr("引用不复制数据：本项目只记一条引用并钉住这一版；分发会复制出一份本地表")
                     } else {
@@ -144,7 +203,7 @@ pub(super) fn render_actions(
                             .child(
                                 Button::new("archive-detail-delete-global")
                                     .with_variant(ButtonVariant::Danger)
-                                    .label(tr("从全局实例删除…"))
+                                    .label(tr("移入回收站…"))
                                     .disabled(!can_delete_global)
                                     .on_click({
                                         let host = host.clone();
@@ -158,9 +217,9 @@ pub(super) fn render_actions(
                                     }),
                             )
                             .child(
-                                div().text_xs().text_color(muted).child(tr(
-                                    "删全局表与登记；已分发到项目的副本不受影响",
-                                )),
+                                div().text_xs().text_color(muted).child(
+                                    tr("移入全局回收站；表与版本快照保留，已分发副本不受影响"),
+                                ),
                             ),
                     ),
             );
@@ -173,7 +232,15 @@ pub(super) fn render_actions(
             // 三个判据都走同一份上下文（多选的限制在列表侧，详情恒单选）。
             let can_open = can_open(&ctx);
             let can_checkout = can_checkout(&ctx);
+            // 已有活跃取回时把租约摆到按钮提示里：同一资产只能有一份草稿在外面，
+            // 不说明的话用户只会看到“取回失败”，不知道先要归档 / 放弃哪份草稿。
+            let checkout_tip = detail
+                .checkout_label
+                .clone()
+                .unwrap_or_else(|| tr("复制一份可写的工作副本（本体不动）").to_string());
             let is_reference = detail.payload_mode == PayloadMode::Reference;
+            // 文件型（本体在本项目 resources/）：删除 = 软删登记 + 本体进回收站；
+            // 取回是独立动作，不再从删除入口自动解锁退草稿。
             let is_global_ref = detail.kind == ArchiveKind::TableRef
                 && detail.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL);
             // 危险区（原型 §3.1）：与日常动作隔开（分隔线 + danger 文字按钮）。
@@ -203,7 +270,7 @@ pub(super) fn render_actions(
             } else if is_reference {
                 "只删除登记记录与版本元数据，源文件留在原位置不受影响；可从回收站还原登记"
             } else {
-                "本体与登记记录一起进项目级回收站，之后可从面板头「⋯ → 回收站…」还原"
+                "本体与登记记录一起进项目回收站（草稿箱栏），之后可从那里还原"
             };
             // 闭包是 `Fn`（每帧重建），且它比 `detail` 活得久——拷一份带走。
             let detail_for_open = detail.clone();
@@ -238,6 +305,7 @@ pub(super) fn render_actions(
                                 Button::new("archive-detail-checkout")
                                     .ghost()
                                     .label(tr("取回（检出）…"))
+                                    .tooltip(checkout_tip.clone())
                                     .disabled(!can_checkout)
                                     .on_click({
                                         let host = host.clone();
@@ -301,6 +369,7 @@ pub(super) fn render_actions(
                                             host.request_delete(
                                                 &[DeleteTarget {
                                                     id: detail.id.clone(),
+                                                    kind: detail.kind,
                                                     mode: detail.payload_mode,
                                                 }],
                                                 window,

@@ -8,17 +8,17 @@ impl AnalyticsResourceStore {
         Self::get_resource_by_id_on(conn.inner()?, id)
     }
 
-    /// 列出**全部存活资产**，每个名字只留**最新版本**（按名字升序）。
+    /// 列出**全部存活资产行**（按 id 身份，每个 head 一行；不再按显示名去重）。
     ///
-    /// 给「数据对象」这类**只想读**的调用方用：资产参与分析只取最新版本（要用旧数据
-    /// 先在资产模块回退），所以这里不做版本枚举。多版本同名的行按 `version` 降序取首行
-    /// 去重——不用 `MAX(version)` 子查询是为了避免把「同名不同 type」的判定写进 SQL，
-    /// 那属于登记层的语义，不该在清单层再抄一遍。
+    /// 刷新链路与数据对象都要看见同类资产：文件、表、`table_ref` 各自有独立身份，
+    /// 按 name 去重会把同名但不同 id 的资产吞掉（表行没有 `file_rel_path`，更不会
+    /// 出现在 [`Self::list_file_archives`] 里）。版本枚举在各自的版本表里做，
+    /// 这一层只回答“当前活着哪些资产”。
     pub async fn list_alive_resources(&self) -> Result<Vec<AnalyticsResource>, CoreError> {
         let conn = self.get_conn().await?;
         let sql = format!(
             "SELECT {RESOURCE_COLUMNS} FROM analytics_resources \
-             WHERE deleted_at IS NULL ORDER BY name ASC, version DESC"
+             WHERE deleted_at IS NULL ORDER BY name ASC, id ASC"
         );
         let mut stmt = conn
             .inner()?
@@ -27,27 +27,15 @@ impl AnalyticsResourceStore {
         let rows = stmt
             .query_map([], map_resource_row)
             .map_err(|e| persistence_err("select", e))?;
-        let all: Vec<AnalyticsResource> = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| persistence_err("select", e))?;
-
-        // 同名多版本：排好序后每个名字只留第一行（= 最新版本）
-        let mut out: Vec<AnalyticsResource> = Vec::with_capacity(all.len());
-        let mut seen: Vec<String> = Vec::new();
-        for row in all {
-            if seen.iter().any(|name| name == &row.name) {
-                continue;
-            }
-            seen.push(row.name.clone());
-            out.push(row);
-        }
-        Ok(out)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| persistence_err("select", e))
     }
 
     /// 同名链上的**当前行**（未删除的最新一版；`None` = 这个名字还没有资产）。
     ///
-    /// 「升级为资产」靠它判断是首次登记还是接续同名链的版本（`table_asset`）；
-    /// 与 `list_alive_resources` 的去重口径一致：只看未删除行。
+    /// 「升级为资产」靠它判断是首次登记还是接续同名链的版本（`table_asset`）。
+    /// 这是**按显示名选链**的兼容入口：同名但不同 id 的资产仍可能并存，
+    /// 新代码不应再把它当作身份判定（身份一律用 id）。
     pub async fn latest_alive_by_name(
         &self,
         name: &str,
@@ -70,31 +58,25 @@ impl AnalyticsResourceStore {
         }
     }
 
-    /// 按**本体表名**找当前版本的那条资产行（「登记为资产」的幂等判据）。
+    /// 某显示名下的**全部存活行**（按版本降序）。
     ///
-    /// 一张表只该有一条资产（`append_table_version` 改的是同一行的 `analytics_table`），
-    /// 所以命中即"这张表已有身份"，不该再登记一次。若有历史脏数据同表两个名字，
-    /// 按版本降序取最新那条。
-    pub async fn latest_alive_by_analytics_table(
-        &self,
-        table: &str,
-    ) -> Result<Option<AnalyticsResource>, CoreError> {
+    /// 身份是 id，不是名字：存量里可能因历史操作留下同名行，服务层做“新名字唯一”
+    /// 检查与选链时都要看到全部候选，不能只拿最新一行假装没有歧义。
+    pub async fn alive_by_name(&self, name: &str) -> Result<Vec<AnalyticsResource>, CoreError> {
         let conn = self.get_conn().await?;
         let sql = format!(
             "SELECT {RESOURCE_COLUMNS} FROM analytics_resources \
-             WHERE analytics_table = ?1 AND deleted_at IS NULL ORDER BY version DESC LIMIT 1"
+             WHERE name = ?1 AND deleted_at IS NULL ORDER BY version DESC, id ASC"
         );
         let mut stmt = conn
             .inner()?
             .prepare(&sql)
             .map_err(|e| persistence_err("select", e))?;
-        let mut rows = stmt
-            .query_map(rusqlite::params![table], map_resource_row)
+        let rows = stmt
+            .query_map(rusqlite::params![name], map_resource_row)
             .map_err(|e| persistence_err("select", e))?;
-        match rows.next() {
-            Some(row) => Ok(Some(row.map_err(|e| persistence_err("select", e))?)),
-            None => Ok(None),
-        }
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| persistence_err("select", e))
     }
 
     /// 单连接版本的读取：供"读 → 写"必须在同一事务内完成的路径复用。

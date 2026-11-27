@@ -34,6 +34,8 @@ pub struct ActionContext {
     ///
     /// 它没有本地本体，`name` 是全局本名、项目里只能改 `alias`；改名类动作必须改道别名。
     pub global_ref: bool,
+    /// 版本时间线选中版（None = 没点过，恢复动作按上一版兜底）。
+    pub selected_version: Option<i32>,
 }
 
 impl ActionContext {
@@ -53,6 +55,7 @@ impl ActionContext {
             read_only,
             multi_count,
             global_ref: false,
+            selected_version: None,
         }
     }
 
@@ -66,6 +69,7 @@ impl ActionContext {
             read_only: false,
             multi_count: 1,
             global_ref: false,
+            selected_version: None,
         }
     }
 
@@ -100,15 +104,16 @@ pub fn can_open(ctx: &ActionContext) -> bool {
     ctx.single() && ctx.status != ArchiveStatus::Missing && (ctx.has_body() || ctx.global_ref)
 }
 
-/// 取回（检出）：往草稿箱写工作副本——只对项目行、**文件本体**、本体正常、项目非只读。
+/// 取回（检出）：往草稿箱写工作副本——项目文件行或**全局文件行**、本体正常、项目非只读。
 ///
-/// 表型没有文件可复制（它的本体是项目分析库里的一张表），取回必失败，所以挡在这里；
-/// 要看旧版数据走版本历史的「用 vN 分析」。引用型有源文件路径，仍可取回。
+/// 全局文件的本体在全局 CAS，取回后落本项目草稿箱并写 `base_scope=global` 租约；
+/// 全局表 / 项目表没有文件可复制，仍挡在这里。
 ///
 /// 内容已变（`ContentChanged`）也挡：那是"本体被绕过只读改过"，先让用户在状态行
 /// 接受当前内容或从历史还原，再取回（否则取走的是来路不明的内容）。
 pub fn can_checkout(ctx: &ActionContext) -> bool {
-    ctx.project() && ctx.status == ArchiveStatus::Normal && !ctx.read_only && ctx.has_payload
+    let scope = ctx.project() || ctx.scope == RowScope::Global;
+    scope && ctx.status == ArchiveStatus::Normal && !ctx.read_only && ctx.has_payload
 }
 
 /// 升级到全局：本质是一次发布——项目行、本体在位（文件或表）、单选、项目非只读。
@@ -128,7 +133,10 @@ pub fn can_promote(ctx: &ActionContext) -> bool {
 /// 注意**不**要求 `has_payload`：分析表型全局行的本体在全局 DuckDB 里，`file_rel_path`
 /// 本就是空——要求它会把最常分发的那一类挡掉。
 pub fn can_distribute(ctx: &ActionContext) -> bool {
-    ctx.scope == RowScope::Global && ctx.status != ArchiveStatus::Missing && ctx.single() && !ctx.read_only
+    ctx.scope == RowScope::Global
+        && ctx.status != ArchiveStatus::Missing
+        && ctx.single()
+        && !ctx.read_only
 }
 
 /// 改显示名 / 别名：只写登记、不碰本体，但**本体缺失的行不给**（原型 §3.1：那一行先走索引修复，
@@ -154,12 +162,12 @@ pub fn can_move_to_group(ctx: &ActionContext) -> bool {
     ctx.project() && !ctx.read_only
 }
 
-/// 从全局实例删除（刀 B）：全局行、单选。
+/// 移入全局回收站（刀 B）：全局行、单选。
 ///
-/// **不看 `status`**：本体缺失（全局表被手工删 / 版本裁剪过）也要允许删——
-/// 这正是清理脏登记的手段；表已不在时 `DROP ... IF EXISTS` 是空操作。
+/// **不看 `status`**：本体缺失（全局表被手工删 / 版本裁剪过）也要允许处理——
+/// 这正是清理脏登记的手段；进站只软删登记，表已不在也不影响登记清理。
 ///
-/// **也不看项目只读**：删除只动全局库，不写项目 `analytics.duckdb` / `resources/`；
+/// **也不看项目只读**：回收站只动全局登记，不写项目 `analytics.duckdb` / `resources/`；
 /// 只读项目里同样要能清理全局脏登记。
 pub fn can_delete_global(ctx: &ActionContext) -> bool {
     !ctx.project() && ctx.single()
@@ -197,6 +205,18 @@ mod tests {
         assert!(!can_move_to_group(&ctx));
         assert!(!can_delete_row(&ctx));
         assert!(can_delete_global(&ctx), "全局行可以从全局实例删除（刀 B）");
+        assert!(!can_checkout(&ctx), "全局表没有文件本体，不能按文件取回");
+    }
+
+    #[test]
+    fn global_file_row_can_checkout() {
+        let mut ctx = ActionContext::project_row();
+        ctx.scope = RowScope::Global;
+        ctx.has_payload = true;
+        ctx.has_table = false;
+        assert!(can_checkout(&ctx), "全局文件取回 = CAS 物化到本项目草稿箱");
+        ctx.read_only = true;
+        assert!(!can_checkout(&ctx), "只读项目不能往草稿箱写");
     }
 
     #[test]
@@ -272,8 +292,14 @@ mod tests {
     fn table_assets_are_openable_promotable_and_deletable_but_not_checkout() {
         let ctx = ActionContext::project_table_row();
         assert!(can_open(&ctx), "表型打开走洞察取样，不该被没有文件路径挡住");
-        assert!(can_promote(&ctx), "表型升级走整表导出（source_table），不是没有本体");
-        assert!(can_delete_from_detail(&ctx), "表型移入回收站 = 只软删登记，表留在分析库");
+        assert!(
+            can_promote(&ctx),
+            "表型升级走整表导出（source_table），不是没有本体"
+        );
+        assert!(
+            can_delete_from_detail(&ctx),
+            "表型移入回收站 = 只软删登记，表留在分析库"
+        );
         assert!(can_rename(&ctx), "改显示名只动登记");
         assert!(
             !can_checkout(&ctx),

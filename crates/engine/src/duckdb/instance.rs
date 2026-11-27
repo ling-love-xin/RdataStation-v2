@@ -69,6 +69,21 @@ pub struct SessionInfo {
     pub open: bool,
 }
 
+/// 会话角色：决定它能不能写全局分析库 `rds_global`。
+///
+/// 口径见 `docs/architecture/analytics_resource/duckdb-ownership-m6-slimming.md` §6：
+/// 全局库在根连接上是 RW，但只有系统会话能写；用户编辑器 / 进程面只读。
+/// 角色不是权限系统，只是把「谁能写全局」收在一个可审计的枚举里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRole {
+    /// 用户 SQL 编辑器 / 文档会话：可写项目库与临时表，全局只读。
+    User,
+    /// 进程面（导出 / 洞察取样）：可写临时表与项目库，全局只读。
+    Process,
+    /// 系统会话：全局迁移 / 全局资产动作的唯一写入通道。
+    System,
+}
+
 /// `rds_tmp` 里一件被登记过的临时结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TempEntry {
@@ -165,9 +180,28 @@ impl std::fmt::Debug for AnalysisInstance {
         let state = self.state.lock();
         f.debug_struct("AnalysisInstance")
             .field("tag", &self.tag)
-            .field("sessions", &state.as_ref().map(|s| s.sessions.len()).unwrap_or(0))
+            .field(
+                "sessions",
+                &state.as_ref().map(|s| s.sessions.len()).unwrap_or(0),
+            )
             .field("temps", &state.as_ref().map(|s| s.temps.len()).unwrap_or(0))
             .finish()
+    }
+}
+
+impl SessionRole {
+    /// 只有系统会话能写全局分析库。
+    pub fn can_write_global(self) -> bool {
+        matches!(self, Self::System)
+    }
+
+    /// 给错误文案用的角色名。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::User => "用户",
+            Self::Process => "进程",
+            Self::System => "系统",
+        }
     }
 }
 
@@ -188,6 +222,10 @@ pub struct AnalysisSession {
     /// 为什么要存：`ATTACH` 出去以后，某条源为什么不可用只有挂载那一步知道；
     /// 面板 / 全局库核对想报原话时，不该再挂一遍去找原因。
     mounted: Mutex<Vec<super::federation::registry::MountedSource>>,
+    /// 会话角色：决定 `rds_global` 是否可写（见 [`SessionRole`]）。
+    role: SessionRole,
+    /// 当前默认 catalog（`USE` 跟踪）；裸名写表时用它判断目标是不是全局库。
+    default_catalog: Mutex<String>,
     /// 最近一次 `USE` 切过去的主源别名（纯展示：面板要在源行上区分「主源 / 已挂载」）。
     ///
     /// 存这里而不是每次现查 `current_database()`：面板是渲染路径，不能为一行小标跑 SQL。
@@ -207,6 +245,15 @@ impl std::fmt::Debug for AnalysisSession {
             .field("id", &self.id)
             .field("label", &self.label)
             .field("owner", &self.owner)
+            .field("role", &self.role)
+            .field(
+                "catalog",
+                &self
+                    .default_catalog
+                    .lock()
+                    .map(|c| c.clone())
+                    .unwrap_or_default(),
+            )
             .field("open", &!self.closed.load(Ordering::SeqCst))
             .finish()
     }
@@ -217,6 +264,17 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// 按 owner 推默认角色：`process` 是进程面，`system:` 前缀是系统通道，其余都是用户会话。
+fn default_role_for_owner(owner: &str) -> SessionRole {
+    if owner == "process" {
+        SessionRole::Process
+    } else if owner.starts_with("system:") {
+        SessionRole::System
+    } else {
+        SessionRole::User
+    }
 }
 
 /// 某个别名是否已经挂在这个实例上（`ATTACH` 是实例级事实，查 `duckdb_databases()`）。
@@ -230,6 +288,7 @@ fn control_has_database(conn: &Connection, alias: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// 进程内分析实例槽：强引用活到 `drop_instance`。
 static INSTANCE: OnceLock<Mutex<Option<Arc<AnalysisInstance>>>> = OnceLock::new();
 
 /// 别名白名单：拼进 SQL 前只认标识符字符（与 `MountRegistry` 的登记口径一致）。
@@ -286,9 +345,7 @@ fn instance_slot() -> &'static Mutex<Option<Arc<AnalysisInstance>>> {
 /// 一放手实例就没了、所有会话跟着失效（"进程单例"必须活到 `drop_instance`）。
 pub fn instance() -> Result<Arc<AnalysisInstance>, String> {
     let slot = instance_slot();
-    let mut guard = slot
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(instance) = guard.as_ref() {
         return Ok(instance.clone());
     }
@@ -318,13 +375,37 @@ pub fn drop_instance() -> bool {
 impl AnalysisInstance {
     /// 开实例（**只由 [`instance`] 与测试调用**）：内存库 + 产品纪律配置 + `rds_tmp`。
     pub fn open() -> Result<Arc<Self>, String> {
-        Self::open_tagged("analysis", Duration::from_millis(DEFAULT_STATEMENT_TIMEOUT_MS))
+        Self::open_tagged(
+            "analysis",
+            Duration::from_millis(DEFAULT_STATEMENT_TIMEOUT_MS),
+        )
     }
 
     /// 测试用：不登记全局，超时与 tag 可指定（避免用例之间互相踩 `rds_tmp`）。
     pub fn open_tagged(tag: &str, timeout: Duration) -> Result<Arc<Self>, String> {
-        let conn = Connection::open_in_memory()
-            .map_err(|error| format!("开分析实例失败：{error}"))?;
+        // 底座走进程根连接：项目库 / 全局库都在同一根连接上 ATTACH，
+        // 不再各开一条文件连接（同进程第二连接必撞单句柄）。
+        let bases = super::federation::session::bases();
+        let project = bases
+            .iter()
+            .find(|base| base.alias == super::federation::session::PROJECT_BASE_ALIAS)
+            .map(|base| std::path::PathBuf::from(&base.path));
+        let global = bases
+            .iter()
+            .find(|base| base.alias == super::federation::session::GLOBAL_BASE_ALIAS)
+            .map(|base| std::path::PathBuf::from(&base.path));
+        let root = if tag == "analysis" {
+            shared::duckdb_root::ensure(project.as_deref(), global.as_deref())
+                .map_err(|error| format!("建立 DuckDB 根连接失败：{error}"))?
+        } else {
+            // 测试用 `open_tagged`：独立 `memory` 根，避免多个用例共享 `main` 的持久表
+            // （2026-11-26 串行跑 engine 库时 4 个计数用例互相污染的根因）。
+            shared::duckdb_root::isolated(project.as_deref(), global.as_deref())
+                .map_err(|error| format!("建立独立 DuckDB 根连接失败：{error}"))?
+        };
+        let conn = root
+            .control()
+            .map_err(|error| format!("取 DuckDB 控制连接失败：{error}"))?;
         DuckDBManager::configure_connection(&conn)
             .map_err(|error| format!("配置分析实例失败：{error}"))?;
         // 第 3b 项：控制连接也要认 `rds_tmp` 裸名（照看临时表、诊断、`drop_temp` 都走它）。
@@ -386,17 +467,28 @@ impl AnalysisInstance {
     /// 用户会对着上个项目的表查数据（比"重建慢一点"严重得多）。
     /// 本方法是**事件路径**（有 I/O）；纯内存读看 [`Self::sessions`] / [`Self::temps`]。
     pub fn refresh_bases(&self) -> Vec<(String, Result<(), String>)> {
+        let bases = super::federation::session::bases();
+        let project = bases
+            .iter()
+            .find(|base| base.alias == super::federation::session::PROJECT_BASE_ALIAS)
+            .map(|base| std::path::PathBuf::from(&base.path));
+        let global = bases
+            .iter()
+            .find(|base| base.alias == super::federation::session::GLOBAL_BASE_ALIAS)
+            .map(|base| std::path::PathBuf::from(&base.path));
+        // 根连接是底座的唯一所有者：换项目必须先让它摘旧再挂新，实例自己不再
+        // 直接 `DETACH`（那会绕过根注册表，后面 Manager 再 ensure 会摘空）。
+        if let Err(error) = shared::duckdb_root::ensure(project.as_deref(), global.as_deref()) {
+            return bases
+                .into_iter()
+                .map(|base| (base.alias, Err(error.clone())))
+                .collect();
+        }
+
         let conn = self
             .control
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let bases = super::federation::session::bases();
-        for base in &bases {
-            if control_has_database(&conn, &base.alias) {
-                // `DETACH` 之前先回默认 catalog：当前默认就是它时 DuckDB 拒绝摘
-                let _ = conn.execute_batch(&format!("USE memory; DETACH {}", base.alias));
-            }
-        }
         super::federation::session::attach_bases(&conn)
     }
 
@@ -493,6 +585,16 @@ impl AnalysisInstance {
         owner: &str,
         label: &str,
     ) -> Result<Arc<AnalysisSession>, String> {
+        self.open_session_with_role(owner, label, default_role_for_owner(owner))
+    }
+
+    /// 开一条**指定角色**的会话（系统会话 / 测试用）。
+    pub fn open_session_with_role(
+        self: &Arc<Self>,
+        owner: &str,
+        label: &str,
+        role: SessionRole,
+    ) -> Result<Arc<AnalysisSession>, String> {
         if owner.trim().is_empty() {
             return Err("会话必须有归属（owner 不能为空）".to_string());
         }
@@ -507,9 +609,9 @@ impl AnalysisInstance {
                 .control
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            control.try_clone().map_err(|error| {
-                format!("分析实例不支持开第二条会话（try_clone 失败）：{error}")
-            })?
+            control
+                .try_clone()
+                .map_err(|error| format!("分析实例不支持开第二条会话（try_clone 失败）：{error}"))?
         };
         let interrupt = conn.interrupt_handle();
         // 第 3b 项：每条会话都认 `rds_tmp` 裸名。克隆虽继承控制连接的设置，
@@ -531,12 +633,14 @@ impl AnalysisInstance {
             last_used_ms: AtomicU64::new(stamp),
             queries: AtomicU64::new(0),
             mounted: Mutex::new(Vec::new()),
+            role,
+            default_catalog: Mutex::new("main".to_string()),
             primary: Mutex::new(None),
             primary_note: Mutex::new(None),
             instance: Arc::downgrade(self),
         });
         state.sessions.insert(id.clone(), session.clone());
-        tracing::info!(session = %id, owner = %owner, label = %label, tag = %self.tag, "分析会话已开");
+        tracing::info!(session = %id, owner = %owner, label = %label, role = ?role, tag = %self.tag, "分析会话已开");
         Ok(session)
     }
 
@@ -565,6 +669,16 @@ impl AnalysisInstance {
         owner: &str,
         label: &str,
     ) -> Result<Arc<AnalysisSession>, String> {
+        self.ensure_session_with_role(owner, label, default_role_for_owner(owner))
+    }
+
+    /// 按 owner 取（必要时建立）**指定角色**的会话。
+    pub fn ensure_session_with_role(
+        self: &Arc<Self>,
+        owner: &str,
+        label: &str,
+        role: SessionRole,
+    ) -> Result<Arc<AnalysisSession>, String> {
         if owner.trim().is_empty() {
             return Err("会话必须有归属（owner 不能为空）".to_string());
         }
@@ -581,11 +695,27 @@ impl AnalysisInstance {
                 }
             }
         }
-        let session = self.open_session(owner, label)?;
+        let session = self.open_session_with_role(owner, label, role)?;
         if let Ok(mut state) = self.state.lock() {
-            state.owners.insert(owner.to_string(), session.id().to_string());
+            state
+                .owners
+                .insert(owner.to_string(), session.id().to_string());
         }
         Ok(session)
+    }
+
+    /// 系统会话：全局迁移 / 全局资产动作的唯一写入通道。
+    ///
+    /// owner 必须带 `system:` 前缀，避免和用户 / 进程会话共用同一条（共用就会把
+    /// 用户的默认 catalog 和 `TEMP` 世界一起改掉）。
+    pub fn ensure_system_session(
+        self: &Arc<Self>,
+        owner: &str,
+    ) -> Result<Arc<AnalysisSession>, String> {
+        if !owner.starts_with("system:") {
+            return Err("系统会话的 owner 必须以 `system:` 开头".to_string());
+        }
+        self.ensure_session_with_role(owner, "system", SessionRole::System)
     }
 
     /// 所有会话摘要（**渲染路径可调**）。
@@ -680,12 +810,7 @@ impl AnalysisInstance {
     /// 同一个别名被两个源看中时，先挂的那个才是库里的真身；后到的必须报失败，
     /// 不能"看到别名已存在就算自己挂上了"（那样查询会静默指到别人的库）。
     pub fn alias_owner(&self, alias: &str) -> Option<String> {
-        self.state
-            .lock()
-            .ok()?
-            .mounts
-            .owner_of(alias)
-            .cloned()
+        self.state.lock().ok()?.mounts.owner_of(alias).cloned()
     }
 
     /// **进程面**会话（owner `process`）：导出、结果集临时表、洞察取样都落在这条上。    ///
@@ -1014,7 +1139,9 @@ impl AnalysisInstance {
             .lock()
             .map(|mut state| {
                 let before = state.temps.len();
-                state.temps.retain(|entry| entry.name != name && entry.name != bare);
+                state
+                    .temps
+                    .retain(|entry| entry.name != name && entry.name != bare);
                 before != state.temps.len()
             })
             .unwrap_or(false);
@@ -1108,6 +1235,11 @@ impl AnalysisSession {
         self.conn.clone()
     }
 
+    /// 本会话的写角色（全局库是否可写由它决定）。
+    pub fn role(&self) -> SessionRole {
+        self.role
+    }
+
     pub fn info(&self) -> SessionInfo {
         SessionInfo {
             id: self.id.clone(),
@@ -1118,6 +1250,75 @@ impl AnalysisSession {
             queries: self.queries.load(Ordering::SeqCst),
             open: self.is_open(),
         }
+    }
+
+    /// 本会话的默认 catalog（`USE` 跟踪；裸名写表时判全局用）。
+    pub fn default_catalog(&self) -> String {
+        self.default_catalog
+            .lock()
+            .map(|catalog| catalog.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+    }
+
+    fn set_default_catalog(&self, catalog: &str) {
+        let mut current = self
+            .default_catalog
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *current = catalog.to_string();
+    }
+
+    /// 归档写闸门：任何会话都不能写 `rds_archive`（冻结快照只读）。
+    fn guard_archive_write(
+        &self,
+        report: &rds_sql::guard::SqlWriteReport,
+    ) -> Result<(), CoreError> {
+        if report.touches_archive_schema {
+            return Err(common_error(
+                "归档 schema rds_archive 不能 ATTACH / DETACH / 切 schema / 改 search_path；\
+                 表资产是冻结快照，请先分发或引用到项目再修改",
+            ));
+        }
+        if report.writes_archive {
+            return Err(common_error(
+                "归档 schema rds_archive 只读：这条语句会改写表资产快照。\
+                 请先把资产分发 / 引用到项目，在 analytics 里改完再归档",
+            ));
+        }
+        Ok(())
+    }
+
+    /// 全局写闸门：user / process 会话不能写 `rds_global`，也不能改它的挂载。
+    ///
+    /// 返回 `Some(catalog)` = 这条 SQL 是 `USE <catalog>`，执行成功后要更新默认 catalog。
+    fn guard_writes(&self, sql: &str) -> Result<Option<String>, CoreError> {
+        let report =
+            rds_sql::guard::write_report(sql, rds_sql::SqlDialect::Duckdb, &self.default_catalog());
+        self.guard_archive_write(&report)?;
+        if self.role.can_write_global() {
+            return Ok(None);
+        }
+        if report.touches_global_catalog {
+            return Err(common_error(format!(
+                "全局分析库 rds_global 不能在{}会话里 ATTACH / DETACH / 切 catalog / 改 search_path；\
+                 全局写入请走系统会话或全局资产动作",
+                self.role.label()
+            )));
+        }
+        if report.writes_global {
+            return Err(common_error(format!(
+                "全局分析库 rds_global 对{}会话只读：这条语句会写全局库。\
+                 要改全局表请走「升级到全局 / 删除 / 版本恢复」这些资产动作，\
+                 或把它分发 / 固化到项目后再改，不要直接写 rds_global",
+                self.role.label()
+            )));
+        }
+        if let Some(reason) = report.unclassifiable {
+            return Err(common_error(format!(
+                "全局写守卫无法确认这条语句不会写全局库，已拒绝：{reason}"
+            )));
+        }
+        Ok(report.use_catalog)
     }
 
     /// 在**本条会话**上执行一句：写语句走实例写车道，超时只中断本会话。
@@ -1141,6 +1342,8 @@ impl AnalysisSession {
         if !self.is_open() {
             return Err(common_error("这条分析会话已经关了，重新开一条再执行"));
         }
+        // 闸门放在 `is_write` 之前：被拒绝的语句不该再进写车道 / 起看门狗。
+        let next_catalog = self.guard_writes(sql)?;
         let is_write = !crate::driver::utils::returns_rows(sql);
         // `upgrade` 出来的 Arc 必须活在 guard 之前：guard 借着它（只在 Arc 存活期间有效）
         let instance = self.instance.upgrade();
@@ -1176,7 +1379,12 @@ impl AnalysisSession {
         self.last_used_ms.store(now_ms(), Ordering::SeqCst);
 
         match outcome {
-            Ok(result) => Ok(result),
+            Ok(result) => {
+                if let Some(catalog) = next_catalog {
+                    self.set_default_catalog(&catalog);
+                }
+                Ok(result)
+            }
             Err(error) => {
                 if timed_out.load(Ordering::SeqCst) {
                     return Err(common_error(format!(
@@ -1188,7 +1396,10 @@ impl AnalysisSession {
                 // 面板上要能一眼看出「这是被中断，不是 SQL 写错」——所以换成人话再交出去。
                 let text = error.to_string();
                 let lowered = text.to_lowercase();
-                if lowered.contains("interrupt") || lowered.contains("cancelled") || lowered.contains("canceled") {
+                if lowered.contains("interrupt")
+                    || lowered.contains("cancelled")
+                    || lowered.contains("canceled")
+                {
                     return Err(common_error(format!(
                         "查询已被中断（本会话已恢复，可继续执行）：{text}"
                     )));
@@ -1254,9 +1465,10 @@ impl AnalysisSession {
         let mounted = if granted.is_empty() {
             Vec::new()
         } else {
-            let conn = self.conn.lock().map_err(|_| {
-                "会话连接锁被污染（上一条语句崩了），重开一条会话".to_string()
-            })?;
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|_| "会话连接锁被污染（上一条语句崩了），重开一条会话".to_string())?;
             super::federation::session::mount_into(&conn, &granted)?
         };
         // 按原顺序拼回去：被拒的源以 Failed 出现（界面上一眼看到是"谁被占了"）
@@ -1354,6 +1566,9 @@ impl AnalysisSession {
         });
         match outcome {
             Ok(()) => {
+                // 内部切库是引擎自己的动作（联邦主源切别名）；默认 catalog 供写闸门判
+                // 「裸名写的是不是全局库」，必须跟着切。
+                self.set_default_catalog(alias);
                 // 切成功才记：失败时主源没变，记下来会让面板把小标写错
                 if let Ok(mut primary) = self.primary.lock() {
                     *primary = Some(alias.to_string());
@@ -1446,7 +1661,8 @@ fn spawn_watchdog(
         return None;
     }
     let started = Instant::now();
-    Some(thread::spawn(move || loop {
+    Some(thread::spawn(move || {
+        loop {
         if done.load(Ordering::SeqCst) {
             return;
         }
@@ -1458,6 +1674,7 @@ fn spawn_watchdog(
         }
         let remaining = timeout - elapsed;
         thread::sleep(remaining.min(Duration::from_millis(20)));
+        }
     }))
 }
 
@@ -1527,6 +1744,32 @@ mod tests {
         assert!(!AnalysisInstance::is_accel_owner("process"));
     }
 
+    /// `rds_archive` 是只读快照层：任何会话的 DDL/DML 都必须在 SQL 闸门被拒。
+    #[test]
+    fn archive_schema_rejects_writes_for_every_session() {
+        let instance = instance("t_archive_guard");
+        let session = instance.open_session("doc-a", "编辑器 A").expect("开 A");
+
+        let err = session
+            .run_with_timeout(
+                "CREATE TABLE rds_archive.arc_should_not_exist AS SELECT 1 AS id",
+                Duration::from_secs(3),
+            )
+            .expect_err("归档 schema 不能写");
+        let text = format!("{err}");
+        assert!(
+            text.contains("rds_archive") && text.contains("只读"),
+            "拒绝原因要指向归档 schema 只读：{text}"
+        );
+
+        let err = session
+            .run_with_timeout("USE rds_archive", Duration::from_secs(3))
+            .expect_err("不能切到归档 schema");
+        assert!(format!("{err}").contains("rds_archive"), "拒绝原因：{err}");
+
+        instance.close_all_sessions();
+    }
+
     /// 会话 A 在 `main` 里建的**持久**表，会话 B 立刻看得见（catalog 实例级共享）。
     #[test]
     fn persistent_tables_are_shared_across_sessions() {
@@ -1546,7 +1789,10 @@ mod tests {
         .expect("插行");
 
         let result = right
-            .run_with_timeout("SELECT id, amount FROM shared_orders ORDER BY id", Duration::from_secs(3))
+            .run_with_timeout(
+                "SELECT id, amount FROM shared_orders ORDER BY id",
+                Duration::from_secs(3),
+            )
             .expect("B 读 A 建的表");
         assert_eq!(result.total_rows, 2, "catalog 共享：B 应看到 A 的持久表");
 
@@ -1568,10 +1814,12 @@ mod tests {
         left.run_with_timeout("SELECT * FROM scratch_only_here", Duration::from_secs(3))
             .expect("自己看得见");
 
-        let other = right.run_with_timeout("SELECT * FROM scratch_only_here", Duration::from_secs(3));
+        let other =
+            right.run_with_timeout("SELECT * FROM scratch_only_here", Duration::from_secs(3));
         let message = other.expect_err("另一个会话不该看到 TEMP 表").to_string();
         assert!(
-            message.contains("scratch_only_here") || message.to_lowercase().contains("does not exist"),
+            message.contains("scratch_only_here")
+                || message.to_lowercase().contains("does not exist"),
             "应为 Catalog Error，实际：{message}"
         );
     }
@@ -1596,11 +1844,17 @@ mod tests {
         assert_eq!(seen.total_rows, 3, "rds_tmp 跨会话可见");
 
         assert_eq!(instance.temps().len(), 1, "只登记一件");
-        assert!(instance.drop_temp("result_set_1").expect("清理"), "手动清理应成功");
+        assert!(
+            instance.drop_temp("result_set_1").expect("清理"),
+            "手动清理应成功"
+        );
         assert!(instance.temps().is_empty(), "登记应销掉");
         assert!(
             right
-                .run_with_timeout("SELECT count(*) FROM rds_tmp.result_set_1", Duration::from_secs(3))
+                .run_with_timeout(
+                    "SELECT count(*) FROM rds_tmp.result_set_1",
+                    Duration::from_secs(3)
+                )
                 .is_err(),
             "清理后两个会话都读不到"
         );
@@ -1767,7 +2021,10 @@ mod tests {
 
         // ① 历史口径：裸名建表（默认 catalog/schema = memory.main）
         session
-            .run_with_timeout("CREATE TABLE tmp_q_legacy (id INTEGER)", Duration::from_secs(3))
+            .run_with_timeout(
+                "CREATE TABLE tmp_q_legacy (id INTEGER)",
+                Duration::from_secs(3),
+            )
             .expect("建历史口径表");
         instance.register_temp("tmp_q_legacy", "用例", "历史口径");
         assert!(
@@ -1776,7 +2033,10 @@ mod tests {
                 .is_ok(),
             "建在前该读得到"
         );
-        assert!(instance.drop_temp("tmp_q_legacy").expect("清理"), "登记该销掉");
+        assert!(
+            instance.drop_temp("tmp_q_legacy").expect("清理"),
+            "登记该销掉"
+        );
         assert!(
             session
                 .run_with_timeout("SELECT count(*) FROM tmp_q_legacy", Duration::from_secs(3))
@@ -1792,10 +2052,18 @@ mod tests {
             )
             .expect("建共享临时");
         instance.register_temp("tmp_i_sample_1", "用例", "新口径");
-        assert!(instance.drop_temp("rds_tmp.tmp_i_sample_1").expect("带前缀清理"), "该清掉");
+        assert!(
+            instance
+                .drop_temp("rds_tmp.tmp_i_sample_1")
+                .expect("带前缀清理"),
+            "该清掉"
+        );
         assert!(
             session
-                .run_with_timeout("SELECT count(*) FROM rds_tmp.tmp_i_sample_1", Duration::from_secs(3))
+                .run_with_timeout(
+                    "SELECT count(*) FROM rds_tmp.tmp_i_sample_1",
+                    Duration::from_secs(3)
+                )
                 .is_err(),
             "清理后 rds_tmp 里也不该有"
         );
@@ -1844,10 +2112,16 @@ mod tests {
         let doomed = instance.open_session("doc-b", "编辑器 B").expect("开 B");
 
         survivor
-            .run_with_timeout("CREATE TEMP TABLE keep_me AS SELECT 1 AS v", Duration::from_secs(3))
+            .run_with_timeout(
+                "CREATE TEMP TABLE keep_me AS SELECT 1 AS v",
+                Duration::from_secs(3),
+            )
             .expect("建 TEMP");
         doomed
-            .run_with_timeout("CREATE TEMP TABLE gone_soon AS SELECT 1 AS v", Duration::from_secs(3))
+            .run_with_timeout(
+                "CREATE TEMP TABLE gone_soon AS SELECT 1 AS v",
+                Duration::from_secs(3),
+            )
             .expect("建 TEMP");
 
         assert!(instance.close_session(doomed.id()), "关 B");
@@ -1895,7 +2169,11 @@ mod tests {
         assert_eq!(instance.alias_for_conn("conn-9"), None);
 
         instance.release_alias("mysql_src");
-        assert_eq!(instance.alias_for_conn("conn-1"), None, "放掉别名要同时清映射");
+        assert_eq!(
+            instance.alias_for_conn("conn-1"),
+            None,
+            "放掉别名要同时清映射"
+        );
         assert_eq!(
             instance
                 .reserve_alias("mysql_src", "conn-2", AccelKind::MySql)
@@ -1929,7 +2207,11 @@ mod tests {
     fn the_default_timeout_is_read_at_runtime() {
         let instance = instance("t_timeout_runtime");
         let session = instance.open_session("doc-a", "编辑器 A").expect("开 A");
-        assert_eq!(instance.timeout(), Duration::from_millis(3000), "用例实例的初始值");
+        assert_eq!(
+            instance.timeout(),
+            Duration::from_millis(3000),
+            "用例实例的初始值"
+        );
 
         // 改到 30ms：无超时的 `run` 也该被掐掉（说明 run 没有缓存旧值）
         instance.set_timeout_ms(30);
@@ -1961,7 +2243,10 @@ mod tests {
         };
         let outcome = session.mount_sources(&[make("dup"), make("dup")]);
         let error = outcome.expect_err("别名重复应整批拒").to_string();
-        assert!(error.contains("出现了两次"), "错误要说清重复，实际：{error}");
+        assert!(
+            error.contains("出现了两次"),
+            "错误要说清重复，实际：{error}"
+        );
 
         session
             .run_with_timeout("SELECT 1 AS ok", Duration::from_secs(3))
@@ -1998,7 +2283,11 @@ mod tests {
         )
         .expect("造源 A");
         let mounted_a = session_a.mount_sources(&[source_a]).expect("挂 A");
-        assert!(mounted_a[0].is_ready(), "第一个源该挂上：{:?}", mounted_a[0].state);
+        assert!(
+            mounted_a[0].is_ready(),
+            "第一个源该挂上：{:?}",
+            mounted_a[0].state
+        );
 
         let source_b = FederatedSource::new(
             "conn-b",
@@ -2007,7 +2296,9 @@ mod tests {
             second_path.to_str().expect("路径"),
         )
         .expect("造源 B");
-        let mounted_b = session_b.mount_sources(&[source_b]).expect("挂 B（不该整批报错）");
+        let mounted_b = session_b
+            .mount_sources(&[source_b])
+            .expect("挂 B（不该整批报错）");
         match &mounted_b[0].state {
             MountState::Failed(reason) => {
                 assert!(reason.contains("已被另一个源"), "要说清被谁占了：{reason}");
@@ -2018,7 +2309,10 @@ mod tests {
 
         // 别名仍指向 A 的库（3 行），而不是 B 的 5 行——没有被静默劫持
         let count = session_b
-            .run_with_timeout("SELECT count(*) AS n FROM shared.items", Duration::from_secs(3))
+            .run_with_timeout(
+                "SELECT count(*) AS n FROM shared.items",
+                Duration::from_secs(3),
+            )
             .expect("查别名");
         assert_eq!(count.to_rows()[0][0].to_string(), "3");
 
@@ -2031,7 +2325,10 @@ mod tests {
         let instance = instance("t_lane");
         let session = instance.open_session("doc-a", "编辑器 A").expect("开 A");
         session
-            .run_with_timeout("CREATE TABLE lane_orders(id INTEGER)", Duration::from_secs(3))
+            .run_with_timeout(
+                "CREATE TABLE lane_orders(id INTEGER)",
+                Duration::from_secs(3),
+            )
             .expect("建表");
 
         let left = Arc::clone(&session);

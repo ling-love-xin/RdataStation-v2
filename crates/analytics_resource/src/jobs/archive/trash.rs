@@ -1,6 +1,8 @@
 //! 回收站取数、动作执行与动作后重取。
 
 use super::*;
+use crate::present::GLOBAL_TRASH_ID_PREFIX;
+use crate::global::GlobalInstanceStore;
 
 /// 取回收站条目 → 对话框种子（工作线程上执行）。
 ///
@@ -18,7 +20,7 @@ pub(crate) async fn load_trash(job: &TrashListJob) -> Result<TrashDialogSeed, St
 
     // 项目库读不到时不弄砸实体清单：第二来源缺失只表现为 reference 条目不显示。
     let reference: Vec<(DateTime<Utc>, TrashRow)> =
-        match open_service(job.project_root.clone(), None).await {
+        match open_service(job.project_root.clone()).await {
             Ok(service) => match service.deleted_registry_archives().await {
                 Ok(rows) => registry_trash_rows(&rows),
                 Err(error) => {
@@ -31,27 +33,33 @@ pub(crate) async fn load_trash(job: &TrashListJob) -> Result<TrashDialogSeed, St
 
     let entity: Vec<(DateTime<Utc>, TrashRow)> =
         entries.iter().filter_map(entity_trash_row).collect();
-    let mut entity_i = 0;
-    let mut ref_i = 0;
-    let mut rows: Vec<TrashRow> = Vec::with_capacity(entity.len() + reference.len());
-    while entity_i < entity.len() || ref_i < reference.len() {
-        let take_entity = match (entity.get(entity_i), reference.get(ref_i)) {
-            (Some(e), Some(r)) => e.0 >= r.0,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            // while 条件已保证至少一项存在，此臂不可达；补齐穷尽性。
-            (None, None) => false,
-        };
-        if take_entity {
-            rows.push(entity[entity_i].1.clone());
-            entity_i += 1;
-        } else {
-            rows.push(reference[ref_i].1.clone());
-            ref_i += 1;
+    // 全局回收站条目并入同一个清单：回收站只有一个入口，用户不该为了找一条
+    // 全局表再换一个对话框。读取失败只降级（项目条目照常列出）。
+    let global: Vec<(DateTime<Utc>, TrashRow)> = match crate::global::GlobalInstanceStore::production().await
+    {
+        Ok(store) => match store.list_global_trash() {
+            Ok(entries) => entries.iter().map(global_trash_row).collect(),
+            Err(error) => {
+                tracing::warn!(error = %error, "读取全局回收站条目失败");
+                Vec::new()
+            }
+        },
+        Err(error) => {
+            tracing::warn!(error = %error, "打开全局实例失败，全局回收站条目不列出");
+            Vec::new()
         }
-    }
+    };
+    let mut rows: Vec<(DateTime<Utc>, TrashRow)> =
+        Vec::with_capacity(entity.len() + reference.len() + global.len());
+    rows.extend(entity);
+    rows.extend(reference);
+    rows.extend(global);
+    // 三路来源统一按删除时间倒序（同一时刻的先后不重要）。
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    let rows: Vec<TrashRow> = rows.into_iter().map(|(_, row)| row).collect();
 
     Ok(TrashDialogSeed {
+        scope: crate::dialogs::trash::TrashScope::Project,
         rows,
         foreign: snapshot
             .foreign
@@ -77,7 +85,7 @@ fn module_label(origin: &str) -> String {
 
 /// 执行一次回收站动作（工作线程上执行）。
 pub(crate) async fn run_trash_action(job: &TrashActionJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), None).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -88,6 +96,26 @@ pub(crate) async fn run_trash_action(job: &TrashActionJob) -> OpOutcome {
     };
     match &job.action {
         TrashAction::Restore { trash_id } => {
+            if let Some(name) = trash_id.strip_prefix(GLOBAL_TRASH_ID_PREFIX) {
+                let store = match GlobalInstanceStore::production().await {
+                    Ok(store) => store,
+                    Err(error) => {
+                        return OpOutcome::Failed {
+                            action: "从全局回收站还原",
+                            reason: format!("打开全局实例失败：{error}"),
+                        };
+                    }
+                };
+                return match store.restore_global(name).await {
+                    Ok(outcome) => OpOutcome::TrashDone {
+                        note: format!("已从全局回收站还原「{name}」（v{}）", outcome.version),
+                    },
+                    Err(error) => OpOutcome::Failed {
+                        action: "从全局回收站还原",
+                        reason: error.to_string(),
+                    },
+                };
+            }
             match service.restore_archive_from_trash(trash_id).await {
                 Ok(resource) => OpOutcome::TrashDone {
                     note: format!("已从回收站还原「{}」", resource.name),
@@ -98,27 +126,67 @@ pub(crate) async fn run_trash_action(job: &TrashActionJob) -> OpOutcome {
                 },
             }
         }
-        TrashAction::Purge { trash_id } => match service.purge_archive(trash_id).await {
-            Ok(()) => OpOutcome::TrashDone {
-                note: "已永久删除该条目（本体不再保留）".to_string(),
-            },
-            Err(error) => OpOutcome::Failed {
-                action: "永久删除",
-                reason: error.to_string(),
-            },
-        },
-        TrashAction::Empty => match service.empty_trash().await {
-            Ok(0) => OpOutcome::TrashDone {
-                note: "回收站里没有资产库的条目".to_string(),
-            },
-            Ok(count) => OpOutcome::TrashDone {
-                note: format!("已清空资产库的回收站（{count} 项，本体不再保留）"),
-            },
-            Err(error) => OpOutcome::Failed {
-                action: "清空回收站",
-                reason: error.to_string(),
-            },
-        },
+        TrashAction::Purge { trash_id } => {
+            if let Some(name) = trash_id.strip_prefix(GLOBAL_TRASH_ID_PREFIX) {
+                let store = match GlobalInstanceStore::production().await {
+                    Ok(store) => store,
+                    Err(error) => {
+                        return OpOutcome::Failed {
+                            action: "永久删除全局条目",
+                            reason: format!("打开全局实例失败：{error}"),
+                        };
+                    }
+                };
+                return match store.purge_global(name).await {
+                    Ok(_) => OpOutcome::TrashDone {
+                        note: "已永久删除该全局条目（表与版本快照不再保留）".to_string(),
+                    },
+                    Err(error) => OpOutcome::Failed {
+                        action: "永久删除全局条目",
+                        reason: error.to_string(),
+                    },
+                };
+            }
+            match service.purge_archive(trash_id).await {
+                Ok(()) => OpOutcome::TrashDone {
+                    note: "已永久删除该条目（本体不再保留）".to_string(),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "永久删除",
+                    reason: error.to_string(),
+                },
+            }
+        }
+        TrashAction::Empty => {
+            let project = service.empty_trash().await;
+            let global: Result<(usize, usize), String> =
+                match GlobalInstanceStore::production().await {
+                    Ok(store) => store
+                        .empty_global_trash()
+                        .await
+                        .map_err(|error| error.to_string()),
+                    Err(error) => Err(format!("打开全局实例失败：{error}")),
+                };
+            match (project, global) {
+                (Ok(project_count), Ok((global_count, skipped))) => {
+                    let mut note = format!(
+                        "已清空回收站（项目 {project_count} 项、全局 {global_count} 项，本体不再保留）"
+                    );
+                    if skipped > 0 {
+                        note.push_str(&format!("；{skipped} 项仍被项目引用，已跳过"));
+                    }
+                    OpOutcome::TrashDone { note }
+                }
+                (Err(error), _) => OpOutcome::Failed {
+                    action: "清空回收站",
+                    reason: error.to_string(),
+                },
+                (_, Err(error)) => OpOutcome::Failed {
+                    action: "清空全局回收站",
+                    reason: format!("{error}"),
+                },
+            }
+        }
     }
 }
 

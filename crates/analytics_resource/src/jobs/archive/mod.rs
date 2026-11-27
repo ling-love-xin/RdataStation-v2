@@ -11,9 +11,9 @@ use chrono::{DateTime, Utc};
 use crate::analysis::AnalysisFacts;
 use crate::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed, TrashRow};
 use crate::payload::PayloadStore;
-use crate::present::{build_trash_snapshot, entity_trash_row, registry_trash_rows};
+use crate::present::{build_trash_snapshot, entity_trash_row, global_trash_row, registry_trash_rows};
 use crate::model::ArchiveAssertion;
-use crate::{ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, KeepVersions};
+use crate::{ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest};
 
 use super::{Job, OpOutcome, free_dest, jobs, open_service};
 
@@ -22,8 +22,6 @@ pub(crate) struct ArchiveJob {
     pub(crate) project_root: PathBuf,
     pub(crate) read_only: bool,
     pub(crate) request: ArchiveRequest,
-    /// 历史内容保留策略（设置项 `resources.keep_versions`，在入队时从主线程读好）。
-    pub(crate) keep_versions: KeepVersions,
     /// 归档前是否**探一次数据文件**（`analysis` 档的采集侧）。
     ///
     /// 为什么要过作业：探测要连 DuckDB、要读文件——不能在事件路径上做（那会卡 UI）。
@@ -73,7 +71,6 @@ pub fn enqueue_archive(
     project_root: PathBuf,
     read_only: bool,
     request: ArchiveRequest,
-    keep_versions: KeepVersions,
     analysis_probe: bool,
     assertion: Option<ArchiveAssertion>,
 ) {
@@ -82,7 +79,6 @@ pub fn enqueue_archive(
         project_root,
         read_only,
         request,
-        keep_versions,
         analysis_probe,
         assertion,
     }));
@@ -146,7 +142,7 @@ pub fn enqueue_trash_action(project_root: PathBuf, read_only: bool, action: Tras
 mod run;
 mod trash;
 
-pub(crate) use run::{run_archive, run_checkout, run_undo, run_trash};
+pub(crate) use run::{run_archive, run_checkout, run_trash, run_undo};
 pub(crate) use trash::{load_trash, reload_trash_after, run_trash_action};
 
 

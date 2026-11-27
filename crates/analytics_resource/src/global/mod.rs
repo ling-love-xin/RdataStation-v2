@@ -18,9 +18,10 @@ use tokio::sync::Mutex as AsyncMutex;
 //   * 升级 = 表 + 版本信息进全局 DuckDB；跨项目唯一法定路径 = 项目 → 全局 → 项目，
 //     项目 ↔ 项目禁止直传。
 //
-// 连接纪律（重要）：
-//   * 全局 DuckDB 是**单写者**——本模块**不得**另开文件连接，必须复用
-//     `GlobalDatabaseManager::duckdb_conn()` 持有的连接（DuckDB 单句柄限制）；
+// 连接纪律（重要，2026-11-26 所有权收口后）：
+//   * 全局 / 项目分析库共用进程级 DuckDB 根连接（`shared::duckdb_root`），
+//     `rds_global` / `analytics` 两个 ATTACH 别名同根；本模块不另开文件连接，
+//     只借全局会话句柄执行 SQL（DuckDB 单句柄限制）；
 //   * 全局 SQLite 复用 `TagTable::open_global` 先例（直接打开文件；WAL 下低频写
 //     可并发）；测试注入独立临时路径，不碰产品数据根。
 // =====================================================================
@@ -34,6 +35,63 @@ use tokio::sync::Mutex as AsyncMutex;
 pub struct GlobalInstanceStore {
     sqlite: Arc<Mutex<Option<rusqlite::Connection>>>,
     duckdb: Arc<AsyncMutex<Option<duckdb::Connection>>>,
+    /// 全局系统目录（`data/system`）：文件资产本体与历史副本都落在它下面。
+    system_dir: PathBuf,
+}
+
+/// 全局文件发布请求（项目文件 → 全局文件，file-first）。
+///
+/// `manifest_id` 有值 = 直接提升项目 CAS 的清单（对象按 hash 复用）；为空时按
+/// `source_abs_path` 现算一份单文件清单。发布不删除项目资产，也不建表。
+#[derive(Debug, Clone)]
+pub struct PublishFileRequest {
+    pub name: String,
+    /// 项目根（读取项目 CAS；没有 manifest 时只用于说明来源）。
+    pub source_project_root: PathBuf,
+    /// 项目 CAS 的 manifest id；文件版本必须提供。
+    pub manifest_id: Option<String>,
+    /// 没有 manifest 时的源文件绝对路径。
+    pub source_abs_path: Option<PathBuf>,
+    /// 分发重建目标（`resources/<rel>`）；空时按资产名 + 扩展名补。
+    pub rel_path: Option<String>,
+    /// 来源项目资产 id / 版本（发布链用）。
+    pub source_resource_id: Option<String>,
+    pub source_version: Option<i32>,
+    /// 已存在同名全局资产时必须给；等于当前 head 才追加，否则 Conflict。
+    pub base_global_version: Option<i32>,
+}
+
+/// 一次全局文件发布的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishFileOutcome {
+    pub resource_id: String,
+    pub name: String,
+    pub version: i32,
+    pub manifest_id: String,
+    pub content_hash: String,
+    pub file_size: i64,
+    pub content_class: String,
+}
+
+/// 全局文件取回结果（落到项目草稿箱，写项目 lease）。
+#[derive(Debug, Clone)]
+pub struct GlobalFileCheckoutOutcome {
+    pub lease_id: String,
+    pub name: String,
+    pub version: i32,
+    pub dest_rel: String,
+    pub content_hash: String,
+    pub file_meta: Option<file_meta::FileMeta>,
+}
+
+/// 全局文件 fork 结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalFileForkOutcome {
+    pub fork_id: String,
+    pub child_resource_id: String,
+    pub child_name: String,
+    pub child_version: i32,
+    pub manifest_id: String,
 }
 
 /// 升级请求（项目 → 全局）。
@@ -41,11 +99,11 @@ pub struct GlobalInstanceStore {
 pub struct PromoteRequest {
     /// 升级后的显示名 = 全局 DuckDB 表名（冲突检测 / 分发定位都靠它）。
     pub name: String,
-    /// 本体种类：数据文件（映射出表）/ 脚本（内容表）。
+    /// 本体种类：数据文件（映射出表）/ 文件资产（CAS，不建表）。
     pub kind: PromoteKind,
-    /// 本体绝对路径（数据文件 / 脚本在项目 `resources/` 下的位置）。
+    /// 数据文件的源路径；文件资产走 `publish_file`，不经这里。
     pub source_abs_path: PathBuf,
-    /// 项目侧相对路径（脚本内容表分发时重建为目标文件；数据文件无此概念）。
+    /// 项目侧相对路径（表型来源只用说明；文件资产走 CAS）。
     pub rel_path: Option<String>,
     /// 内容指纹（sha256）。
     pub content_hash: String,
@@ -68,26 +126,25 @@ pub struct PromoteRequest {
     pub source_table: Option<String>,
     /// 本次升级的历史版本表保留策略（`None` = 不裁剪）。
     ///
-    /// 一版一张表，全局库随版本数线性增长；这里给 `Some(KeepVersions)` 时，
-    /// 登记成功后按同名链裁掉更早版本的表（**只删内容表，登记与版本快照都留**）。
+    /// 快照随版本增长；这里给 `Some(KeepVersions)` 时，登记成功后按版本链裁掉
+    /// 更早的快照（**只删物理快照，登记与版本索引都留**）。
     /// 由宿主的设置项驱动（`ResourceHostBackend::keep_versions`）。
     pub keep_versions: Option<crate::model::KeepVersions>,
+    /// 发布者看到的全局 head 版本（乐观并发基准）。
+    ///
+    /// - `Some(base)`：head 必须是 v`base` 才追加；落后就 `StaleBase`，只允许 fork；
+    /// - `None`：首次发布；同名 head 已存在时仍按旧口径要求 `overwrite`（由作业层
+    ///   把「覆盖」转成显式 base）。
+    pub base_global_version: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromoteKind {
     /// 数据文件：CSV / TSV / Parquet / Excel / JSON → 全局表（read_xxx 映射）。
     DataFile,
-    /// 脚本 / 文本：内容表进全局（方案 A，§13.5），分发时重建为文件。
-    Script,
+    /// 文件-first：任意文件（含二进制）进全局 CAS，不自动建表；分发/取回都按文件。
+    File,
 }
-
-/// 脚本型资源提升到全局的体积上限（16 MiB）。
-///
-/// 脚本在全局库里是一张 `filename/content/content_hash` 三列表的**单行 TEXT**：
-/// 它承载的是定义而不是数据，16 MiB 已是正常脚本（几百 KB）的几十倍。超过就拒绝，
-/// 并指引按数据文件归档——那条路走 `CREATE TABLE AS read_xxx`，不进进程内存。
-pub const MAX_SCRIPT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// 升级结果。
 #[derive(Debug, Clone)]
@@ -191,6 +248,20 @@ pub enum InstanceOpError {
         /// 撞在哪一层：让冲突框说清"是登记、是表、还是文件"，而不是笼统一句"已有同名"。
         field: ConflictField,
     },
+    /// 全局文件发布的 base 落后：只允许 fork / 取消，不静默覆盖。
+    #[error("全局「{name}」head 已到 v{head}，本次发布 base 是 {base:?}：请 fork 或取消")]
+    StaleBase {
+        name: String,
+        base: Option<i32>,
+        head: i32,
+    },
+    /// 全局文件仍有活跃取回租约（落地项目 + 草稿路径）。
+    #[error("全局「{name}」仍有活跃取回（项目 {project_root}，草稿 {dest_rel}）：先提交或放弃")]
+    LeaseActive {
+        name: String,
+        project_root: String,
+        dest_rel: String,
+    },
     /// 资源不存在（分发引用了未登记的全局资源）。
     #[error("资源不存在：{name}")]
     NotFound { name: String },
@@ -209,35 +280,6 @@ pub struct ProjectDuckConn(
     pub Arc<AsyncMutex<Option<duckdb::Connection>>>,
     pub Arc<engine::persistence::ProjectSqlitePool>,
 );
-
-/// 把脚本内容重建为项目 `resources/<rel>` 文件（§13.5 方案 A 分发侧）。
-///
-/// 目录自动创建；文件写入后即归档本体（File 档 copy 语义）。
-pub fn write_project_file(
-    project_root: &Path,
-    rel: &str,
-    content: &str,
-    name: &str,
-) -> Result<(), CoreError> {
-    let target = project_root.join("resources").join(rel);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            CoreError::storage(StorageError::Persistence {
-                store: "analytics_resources".to_string(),
-                operation: "create_resources_dir".to_string(),
-                reason: format!("{}: {}", target.display(), e),
-            })
-        })?;
-    }
-    std::fs::write(&target, content).map_err(|e| {
-        CoreError::storage(StorageError::Persistence {
-            store: "analytics_resources".to_string(),
-            operation: "write_project_file".to_string(),
-            reason: format!("{}（分发「{name}」）: {}", target.display(), e),
-        })
-    })?;
-    Ok(())
-}
 
 /// 项目侧重名双保险探测（§13.6 冲突询问）：SQLite 未删登记 + DuckDB 表 + resources 文件，
 /// 任一命中即视为冲突。与升级侧 `promote` 的"登记层 + 本体层"口径一致，不静默覆盖。
@@ -336,9 +378,11 @@ impl GlobalInstanceStore {
             ))
         })?;
         let duckdb = manager.duckdb_conn().acquire().await?;
+        let system_dir = engine::migration::get_system_dir()?;
         Ok(Self {
             sqlite: Arc::new(Mutex::new(None)),
             duckdb,
+            system_dir,
         })
     }
 
@@ -347,33 +391,7 @@ impl GlobalInstanceStore {
     /// 建表幂等：跑 026 迁移 SQL（与 engine 全局迁移同一份），保证测试库结构
     /// 与生产一致（`map_resource_row` 引用的列全在）。
     pub async fn open_at(sqlite_path: PathBuf, duckdb_path: PathBuf) -> Result<Self, CoreError> {
-        if let Some(parent) = sqlite_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                CoreError::storage(StorageError::Persistence {
-                    store: "analytics_resources_global".to_string(),
-                    operation: "create_global_dir".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
-        }
-        let sqlite = rusqlite::Connection::open(&sqlite_path).map_err(|e| {
-            CoreError::storage(StorageError::Persistence {
-                store: "analytics_resources_global".to_string(),
-                operation: "open_sqlite".to_string(),
-                reason: e.to_string(),
-            })
-        })?;
-        // 全局库建表 SQL 统一从 `schema_sql` 取：此前 026/033/034 三段在这里手抄，
-        // 加一个迁移就得记着补这一处，见 `store::schema_sql` 的注释。
-        sqlite
-            .execute_batch(super::store::schema_sql::GLOBAL_MIGRATIONS_SQL)
-            .map_err(|e| {
-                CoreError::storage(StorageError::Persistence {
-                    store: "analytics_resources_global".to_string(),
-                    operation: "migrate_global_schema".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
+        let sqlite = open_registry(&sqlite_path)?;
         // 格式守门（2026-11-01）：DuckDB 能打开 SQLite 格式的同名文件（内置 SQLite 存储后端），
         // 所以必须先断格式，不能只靠 open 成功与否判断。
         shared::duckdb_open::assert_native_format(&duckdb_path).map_err(|e| {
@@ -390,28 +408,88 @@ impl GlobalInstanceStore {
                 reason: e.to_string(),
             })
         })?;
+        let system_dir = sqlite_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
         Ok(Self {
             sqlite: Arc::new(Mutex::new(Some(sqlite))),
             duckdb: Arc::new(AsyncMutex::new(Some(duckdb))),
+            system_dir,
         })
     }
 
+    /// 测试专用：登记库走临时 SQLite，DuckDB 用调用方给的会话。
+    ///
+    /// 同根改造后 M6 测试必须让全局库与项目库挂在同一条根连接上；调用方用
+    /// `shared::duckdb_root::isolated` 建根，再把 `handle(GLOBAL_ALIAS)` 传进来。
+    #[cfg(test)]
+    pub(crate) fn open_at_handle(
+        sqlite_path: PathBuf,
+        duckdb: duckdb::Connection,
+    ) -> Result<Self, CoreError> {
+        let sqlite = open_registry(&sqlite_path)?;
+        let system_dir = sqlite_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        Ok(Self {
+            sqlite: Arc::new(Mutex::new(Some(sqlite))),
+            duckdb: Arc::new(AsyncMutex::new(Some(duckdb))),
+            system_dir,
+        })
+    }
+}
+
+/// 打开全局登记库并跑全局迁移。
+fn open_registry(sqlite_path: &Path) -> Result<rusqlite::Connection, CoreError> {
+    if let Some(parent) = sqlite_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "analytics_resources_global".to_string(),
+                operation: "create_global_dir".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+    }
+    let sqlite = rusqlite::Connection::open(sqlite_path).map_err(|e| {
+        CoreError::storage(StorageError::Persistence {
+            store: "analytics_resources_global".to_string(),
+            operation: "open_sqlite".to_string(),
+            reason: e.to_string(),
+        })
+    })?;
+    // 全局库建表 SQL 统一从 `schema_sql` 取：此前 026/033/034 三段在这里手抄，
+    // 加一个迁移就得记着补这一处，见 `store::schema_sql` 的注释。
+    sqlite
+        .execute_batch(super::store::schema_sql::GLOBAL_MIGRATIONS_SQL)
+        .map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "analytics_resources_global".to_string(),
+                operation: "migrate_global_schema".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+    Ok(sqlite)
 }
 
 pub mod delete;
 pub mod distribute;
+pub mod file;
+pub mod gc;
 pub mod list;
 pub mod promote;
 pub mod refs;
 pub mod register;
 pub mod sql;
-pub mod table_name;
+pub mod table_asset;
 
-pub use self::delete::GlobalDeleteOutcome;
-pub use self::list::{list_global_resources, to_global_rows};
+pub use self::delete::{
+    GlobalDeleteOutcome, GlobalRestoreOutcome, GlobalTrashEntry, GlobalTrashOutcome,
+};
+pub use self::list::{get_global_resource, list_global_resources, to_global_rows};
 pub use self::refs::{GlobalRefOutcome, GlobalRefPin};
-pub(crate) use self::sql::{duckdb_err, file_read_expr, quote_ident, sqlite_err};
-
+pub(crate) use self::sql::{duckdb_err, file_read_expr, quote_ident, sqlite_err, table_exists_in};
 
 #[cfg(test)]
 mod tests;

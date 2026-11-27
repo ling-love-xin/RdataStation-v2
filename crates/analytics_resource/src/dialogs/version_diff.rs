@@ -18,17 +18,28 @@ use gpui_kit::*;
 
 use crate::ui;
 
+/// 对比对象种类：文件走编辑式文本 diff，表走 schema + 有界行级 diff。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionDiffKind {
+    File,
+    Table,
+}
+
 /// 打开 diff 对话框所需的全部信息（宿主取数线程备好）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionDiffSeed {
     /// 存档显示名（标题用）。
     pub name: String,
-    /// 对比的旧版本号（版本历史里选的那一版）。
+    /// 对比的旧版本号（两版按版本号排序后的低版）。
     pub old_version: i32,
-    /// 当前版本号（新侧）。
-    pub current_version: i32,
+    /// 对比的新版本号（可能是历史版本，也可能是本体当前版本）。
+    pub new_version: i32,
     /// unified diff patch 文本（`similar` 生成；`DiffFile::parse` 在这里解析）。
     pub patch: String,
+    /// 文件式文本 diff / 表式结构 + 行级 diff。
+    pub kind: VersionDiffKind,
+    /// 表版本的 schema 与行数摘要；文件对比为空。
+    pub summary: Option<String>,
 }
 
 /// 待展示的 diff 文件：patch 为空 / 解析不出内容 → `None`（不弹空对话框）。
@@ -62,7 +73,9 @@ pub fn open_version_diff_dialog(
     let on_close: Rc<dyn Fn(&mut App)> = Rc::new(on_close);
     let name = seed.name.clone();
     let old_version = seed.old_version;
-    let current_version = seed.current_version;
+    let new_version = seed.new_version;
+    let is_table = matches!(seed.kind, VersionDiffKind::Table);
+    let summary = seed.summary.clone();
     // `DiffState` 在开窗前建好：`open_dialog` 的 builder 是 `Fn`（每帧重建），在里面 `cx.new`
     // 就会每帧漏一个 `DiffState`（`dialogs/mod.rs` 纪律 1）。
     let state = cx.new(|cx| DiffState::new(files, cx));
@@ -84,7 +97,12 @@ pub fn open_version_diff_dialog(
             .justify_between()
             .gap_2()
             .child(div().text_xs().text_color(muted).child(format!(
-                "v{old_version} → v{current_version} 的差异（只读）"
+                "v{old_version} → v{new_version} 的{}（只读）",
+                if is_table {
+                    "表版本差异"
+                } else {
+                    "差异"
+                }
             )))
             .child(
                 div()
@@ -120,11 +138,11 @@ pub fn open_version_diff_dialog(
                     ),
             );
 
-        let body = div()
-            .v_flex()
-            .w_full()
-            .gap_2()
-            .child(mode_row)
+        let mut body = div().v_flex().w_full().gap_2().child(mode_row);
+        if let Some(summary) = summary.clone() {
+            body = body.child(div().text_xs().text_color(muted).child(summary));
+        }
+        let body = body
             // diff 区域：组件自带滚动与键盘导航，只给一个带高度上限的容器。
             .child(
                 Diff::new(&state)
@@ -135,7 +153,7 @@ pub fn open_version_diff_dialog(
             );
 
         dialog
-            .title(format!("{name} · v{old_version} → v{current_version}"))
+            .title(format!("{name} · v{old_version} → v{new_version}"))
             .w(cx.theme().font_size * ui::DIFF_DIALOG_WIDTH)
             .child(body)
             .footer(

@@ -13,6 +13,8 @@ struct TestEnv {
     project_pool: Arc<ProjectSqlitePool>,
     project_duckdb: Arc<AsyncMutex<Option<duckdb::Connection>>>,
     project_root: PathBuf,
+    /// 同根连接的所有者；测试结束时随 `TestEnv` 一起释放。
+    _root: Arc<shared::duckdb_root::DuckDbRoot>,
 }
 
 async fn create_test_env() -> TestEnv {
@@ -23,11 +25,24 @@ async fn create_test_env() -> TestEnv {
     fs::create_dir_all(&project_dir).expect("create project dir");
     fs::create_dir_all(project_dir.join("resources")).expect("create resources dir");
 
-    let store = GlobalInstanceStore::open_at(
-        global_dir.join("global.db"),
-        global_dir.join("analytics.duckdb"),
+    // 同根改造：全局库与项目库必须先存在，再由一条 isolated 根连接同时挂上；
+    // 两边各开独立连接在 M6 直连 CTAS 下会互相看不见。
+    let global_duckdb_path = global_dir.join("analytics.duckdb");
+    let project_duckdb_path = project_dir.join(".RSmeta/analytics.duckdb");
+    fs::create_dir_all(project_duckdb_path.parent().unwrap()).expect("create rsmeta for duckdb");
+    drop(duckdb::Connection::open(&global_duckdb_path).expect("create global duckdb"));
+    drop(duckdb::Connection::open(&project_duckdb_path).expect("create project duckdb"));
+    let root = shared::duckdb_root::isolated(
+        Some(project_duckdb_path.as_path()),
+        Some(global_duckdb_path.as_path()),
     )
-    .await
+    .expect("isolated duckdb root");
+
+    let store = GlobalInstanceStore::open_at_handle(
+        global_dir.join("global.db"),
+        root.handle(shared::duckdb_root::GLOBAL_ALIAS)
+            .expect("global handle"),
+    )
     .expect("open global store");
 
     // 项目 SQLite（跑 020/023/024 迁移，与生产结构一致）。
@@ -46,11 +61,10 @@ async fn create_test_env() -> TestEnv {
             .expect("run analytics_resources migrations");
     }
 
-    // 项目 DuckDB 写连接（独立临时文件）。
-    let duckdb_path = project_dir.join(".RSmeta/analytics.duckdb");
-    fs::create_dir_all(duckdb_path.parent().unwrap()).expect("create rsmeta for duckdb");
+    // 项目 DuckDB 会话：与全局句柄同根，默认 catalog 指到 analytics。
     let project_duckdb = Arc::new(AsyncMutex::new(Some(
-        duckdb::Connection::open(&duckdb_path).expect("open project duckdb"),
+        root.handle(shared::duckdb_root::PROJECT_ALIAS)
+            .expect("project handle"),
     )));
 
     TestEnv {
@@ -59,6 +73,7 @@ async fn create_test_env() -> TestEnv {
         project_pool: pool,
         project_duckdb,
         project_root: project_dir,
+        _root: root,
     }
 }
 
@@ -73,10 +88,10 @@ fn promote_req(name: &str, path: &Path, kind: PromoteKind) -> PromoteRequest {
         name: name.to_string(),
         kind,
         source_abs_path: path.to_path_buf(),
-        // 数据文件分发 = 建项目表（无重建目标）；脚本分发 = 重建 resources/<rel> 文件。
+        // 数据文件分发 = 建项目表（无重建目标）；文件分发 = 重建 resources/<rel> 文件。
         rel_path: match kind {
             PromoteKind::DataFile => None,
-            PromoteKind::Script => Some(format!("work/{name}")),
+            PromoteKind::File => Some(format!("work/{name}")),
         },
         content_hash: format!("hash_{}", Uuid::new_v4().simple()),
         file_size: Some(123),
@@ -87,6 +102,8 @@ fn promote_req(name: &str, path: &Path, kind: PromoteKind) -> PromoteRequest {
         source_table: None,
         // 默认不裁（用例要看全部版本表）；裁剪用例自己填。
         keep_versions: None,
+        // 默认首次发布；base 冲突用例自己填。
+        base_global_version: None,
     }
 }
 
@@ -107,23 +124,30 @@ fn read_global_table(env: &TestEnv, name: &str) -> Option<String> {
 }
 
 #[tokio::test]
-async fn g001_promote_data_file_and_register_global() {
+async fn g001_promote_data_file_as_global_snapshot() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("orders_v1", &csv, PromoteKind::DataFile);
 
-    let outcome = env.store.promote(&req).await.expect("promote");
+    let outcome = env
+        .store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
     assert_eq!(outcome.version, 1, "首版从 1 开始");
     assert!(!outcome.overwritten);
     assert_eq!(outcome.row_count, Some(3), "CSV 3 行");
     assert_eq!(outcome.column_count, Some(3), "CSV 3 列");
 
-    // 全局 DuckDB 表真实存在 + 行数一致：表名取自登记行的 `analytics_table`
-    // （G2 起是 `res_<描述>_<时间戳>`，不再等于资产名）。
+    // 数据文件也冻结成不可变快照，物理表在 `rds_archive.arc_*`。
     let table = read_global_table(&env, "orders_v1").expect("新升级的行必须登记表名");
-    assert!(table.starts_with("res_orders_v1_"), "一版一张表：{table}");
-    let (rows, cols) = env.store.table_stats(&table).await.expect("global stats");
-    assert_eq!(rows, Some(3), "全局表行数 = CSV 行数");
+    assert!(table.starts_with("arc_"), "全局快照命名：{table}");
+    let (rows, cols) = env
+        .store
+        .table_stats(&format!("rds_archive.{table}"))
+        .await
+        .expect("global stats");
+    assert_eq!(rows, Some(3), "全局快照行数 = CSV 行数");
     assert_eq!(cols, Some(3));
 
     // 全局登记行（scope = 'global'，kind = 'analysis'）。
@@ -139,11 +163,15 @@ async fn g001_promote_data_file_and_register_global() {
         Some(table.as_str()),
         "登记行的表名要和建出来的那张表一致"
     );
-    assert_eq!(row.structured, Some(1), "数据文件升级出来的全局表能参与分析");
+    assert_eq!(
+        row.structured,
+        Some(1),
+        "数据文件升级出来的全局表能参与分析"
+    );
     assert!(
         row.definition_sql
-            .as_deref()
-            .unwrap_or("")
+        .as_deref()
+        .unwrap_or("")
             .contains("read_csv_auto")
     );
 
@@ -152,7 +180,7 @@ async fn g001_promote_data_file_and_register_global() {
         .with_sqlite(|conn| {
             let v: i32 = conn
                 .query_row(
-                    "SELECT count(*) FROM analytics_resource_versions WHERE resource_id = ?1",
+                    "SELECT count(*) FROM table_asset_versions WHERE asset_id = ?1",
                     rusqlite::params![row.id],
                     |r| r.get(0),
                 )
@@ -170,12 +198,15 @@ async fn g002_promote_conflict_then_overwrite() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("orders_conf", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("first promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("first promote");
 
     // 同名再升级 → Conflict。
     let err = env
         .store
-        .promote(&req)
+        .promote_file_as_table_asset(&req, false)
         .await
         .expect_err("second promote must conflict");
     assert!(
@@ -183,10 +214,11 @@ async fn g002_promote_conflict_then_overwrite() {
         "同名升级应报 Conflict，实际 {err:?}"
     );
 
-    // 覆盖式升级 → 版本 2。
+    // 覆盖式升级 → 内容变了才追加版本 2；同内容会幂等复用 v1。
+    fs::write(&csv, "id,sku,qty\n1,a,1\n2,b,2\n3,c,3\n").expect("rewrite csv");
     let out = env
         .store
-        .promote_overwrite(&req)
+        .promote_file_as_table_asset(&req, true)
         .await
         .expect("overwrite promote");
     assert_eq!(out.version, 2, "覆盖后版本接续旧链");
@@ -200,49 +232,14 @@ async fn g002_promote_conflict_then_overwrite() {
 }
 
 #[tokio::test]
-async fn g003_promote_script_content_table() {
-    let env = create_test_env().await;
-    let script = env.dir.join("script.sql");
-    fs::write(&script, "SELECT 1 AS one;\n-- 注释\n").expect("write script");
-    let req = promote_req("calc_script", &script, PromoteKind::Script);
-
-    let outcome = env.store.promote(&req).await.expect("promote script");
-    assert_eq!(outcome.row_count, Some(1), "内容表固定 1 行（内容聚合）");
-
-    // 全局内容表可读回原文（分发重建依赖它）——表名取自登记行（G2 起带时间戳）。
-    let table = read_global_table(&env, "calc_script").expect("内容表名");
-    let content = env
-        .store
-        .read_script_content(&table)
-        .await
-        .expect("read content");
-    assert!(content.contains("SELECT 1 AS one"), "内容完整入库");
-
-    let list = list_global_resources(&env.store).expect("list");
-    assert_eq!(list.len(), 1);
-    assert_eq!(list[0].kind, "analysis");
-    assert_eq!(
-        list[0].structured,
-        Some(0),
-        "脚本没有列结构，不参与分析"
-    );
-    assert!(
-        list[0]
-            .file_rel_path
-            .as_deref()
-            .unwrap_or("")
-            .contains("calc_script")
-    );
-
-    let _ = fs::remove_dir_all(&env.dir);
-}
-
-#[tokio::test]
 async fn g004_distribute_table_to_project() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("shared_orders", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
 
     let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
     let outcome = env
@@ -290,54 +287,6 @@ async fn g004_distribute_table_to_project() {
 }
 
 #[tokio::test]
-async fn g005_distribute_script_rebuilds_file() {
-    let env = create_test_env().await;
-    let script = env.dir.join("report.md");
-    fs::write(&script, "# 周报\n\n数据正常\n").expect("write md");
-    let req = promote_req("weekly_note", &script, PromoteKind::Script);
-    env.store.promote(&req).await.expect("promote script");
-
-    let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
-    let outcome = env
-        .store
-        .distribute(&project_conn, &env.project_root, "weekly_note", None)
-        .await
-        .expect("distribute script");
-    assert_eq!(outcome.shape, DistributeShape::File, "脚本分发重建为文件");
-
-    // 文件真实重建在项目 resources/ 下（方案 A 分发侧）。
-    let rel = env.store
-            .with_sqlite(|conn| {
-                conn.query_row(
-                    "SELECT file_rel_path FROM analytics_resources WHERE name = 'weekly_note' AND scope = 'global' AND deleted_at IS NULL",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .map_err(sqlite_err("read rel"))
-            })
-            .expect("read global rel");
-    let rebuilt = env.project_root.join("resources").join(&rel);
-    let content = fs::read_to_string(&rebuilt).expect("read rebuilt file");
-    assert!(content.contains("周报"), "内容重建完整");
-    assert!(content.contains("数据正常"));
-
-    // 项目侧是 File 档登记。
-    let pool = &env.project_pool;
-    let conn = pool.acquire().await.expect("acquire");
-    let conn = conn.inner().expect("inner");
-    let kind: String = conn
-            .query_row(
-                "SELECT kind FROM analytics_resources WHERE name = 'weekly_note' AND deleted_at IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query kind");
-    assert_eq!(kind, "file");
-
-    let _ = fs::remove_dir_all(&env.dir);
-}
-
-#[tokio::test]
 async fn g006_global_row_missing_returns_not_found() {
     let env = create_test_env().await;
     let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
@@ -356,24 +305,27 @@ async fn g006_global_row_missing_returns_not_found() {
 /// 冲突回执要说清**撞在哪一层**：三查（登记 / 表 / 文件）都可能命中，
 /// 但用户接下来要做的事不一样，笼统一句"已有同名"帮不上判断。
 ///
-/// 2026-11-16（G2）起升级侧只会命中登记层：一版一张表、表名带时间戳，
-/// 「全局表已被同名对象占用」不再是一种可能，剩下的是「同名资产已经有一版」。
+/// 升级侧只会命中登记层：全局快照表名带 uuid，不再与资产名相同，
+/// 剩下的是「同名资产已经有一版」。
 #[tokio::test]
 async fn g007_conflict_reports_which_field_was_hit() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("orders_field", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("first promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("first promote");
 
     // 升级侧：只有登记层会命中（表层不再是同名判据）。
     let err = env
         .store
-        .promote(&req)
+        .promote_file_as_table_asset(&req, false)
         .await
         .expect_err("second promote must conflict");
     match err {
         InstanceOpError::Conflict { field, .. } => {
-            assert_eq!(field, ConflictField::Registry, "一版一张表后只剩登记层冲突");
+            assert_eq!(field, ConflictField::Registry, "只剩登记层冲突");
         }
         other => panic!("应报 Conflict，实际 {other:?}"),
     }
@@ -408,7 +360,10 @@ async fn g008_distribute_overwrite_keeps_the_version_chain() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("chain_orders", &csv, PromoteKind::DataFile);
-    env.store.promote(&req).await.expect("promote");
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
 
     let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
     let first = env
@@ -444,280 +399,6 @@ async fn g008_distribute_overwrite_keeps_the_version_chain() {
     let _ = fs::remove_dir_all(&env.dir);
 }
 
-/// 覆盖失败时旧内容必须回到原位：覆盖不是「先删后建」，而是「先藏后换、失败搬回」。
-///
-/// 失败注入：把全局表 DROP 掉但保留登记行——脚本分发要在内容表里读正文，
-/// 读不到就必然报错。此时项目侧旧文件、旧登记都必须还在原处，
-/// 备份目录也不能留残骸（否则用户既看不到旧内容，又平白多一堆隐藏文件）。
-#[tokio::test]
-async fn g009_overwrite_failure_restores_the_old_content() {
-    let env = create_test_env().await;
-    let script = env.dir.join("report.md");
-    fs::write(&script, "# 第一版\n").expect("write md");
-    let req = promote_req("ovr_note", &script, PromoteKind::Script);
-    env.store.promote(&req).await.expect("promote script");
-
-    let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
-    let first = env
-        .store
-        .distribute(&project_conn, &env.project_root, "ovr_note", None)
-        .await
-        .expect("first distribute");
-    assert_eq!(first.version, 1);
-    assert_eq!(first.shape, DistributeShape::File);
-
-    let rel = "work/ovr_note";
-    let rebuilt = env.project_root.join("resources").join(rel);
-    assert!(rebuilt.is_file(), "首版文件已重建到 resources/");
-
-    // ---- 注入失败：全局表消失、登记还在 ----
-    // 表名按登记行取（G2 起表名带时间戳，不再等于资产名）。
-    let table = read_global_table(&env, "ovr_note").expect("登记行必有表名");
-    env.store
-        .drop_global_table(&table)
-        .await
-        .expect("drop global table");
-
-    let err = env
-        .store
-        .distribute_overwrite(&project_conn, &env.project_root, "ovr_note", None)
-        .await
-        .expect_err("内容表没了，覆盖分发必须失败");
-    assert!(
-        matches!(err, InstanceOpError::Core(_)),
-        "读不到内容表应报存储错误，实际 {err:?}"
-    );
-
-    // 旧文件回到原位，内容仍是第一版。
-    assert!(rebuilt.is_file(), "失败后旧文件必须搬回原位");
-    let content = fs::read_to_string(&rebuilt).expect("read restored file");
-    assert!(content.contains("第一版"), "旧内容不能被清掉");
-
-    // 旧登记仍是活跃行（没被这次失败永久软删）。
-    let pool = &env.project_pool;
-    let conn = pool.acquire().await.expect("acquire");
-    let conn = conn.inner().expect("inner");
-    let active: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM analytics_resources \
-             WHERE name = 'ovr_note' AND scope = 'project' AND deleted_at IS NULL",
-            [],
-            |row| row.get(0),
-        )
-        .expect("count active rows");
-    assert_eq!(active, 1, "回滚后旧登记仍是活跃行");
-
-    // 备份目录不留残骸。
-    let backup_dir = env
-        .project_root
-        .join(crate::payload::META_DIR_NAME)
-        .join("overwrite-backup");
-    assert!(!backup_dir.exists(), "回滚后不留备份目录");
-
-    let _ = fs::remove_dir_all(&env.dir);
-}
-
-/// 脚本内容表只该有一行：多于一行时宁可报错，也不能静默取首行，
-/// 否则产出的文件"看着正常、内容不全"，用户与索引都对不上。
-#[tokio::test]
-async fn g010_script_content_with_extra_rows_is_rejected() {
-    let env = create_test_env().await;
-    let script = env.dir.join("report.md");
-    fs::write(&script, "# 初稿\n").expect("write md");
-    let req = promote_req("bad_rows", &script, PromoteKind::Script);
-    env.store.promote(&req).await.expect("promote script");
-
-    // 把表写坏：再插一行（模拟外部误写，或未来改成追加语义却漏了读侧）。
-    // 表名按登记行取（G2 起不等于资产名）。
-    let table = read_global_table(&env, "bad_rows").expect("内容表名");
-    let insert_sql = format!(
-        "INSERT INTO {} (\"filename\", \"content\", \"content_hash\") \
-         VALUES ('work/bad_rows', '# 第二行', 'h2');",
-        crate::global::quote_ident(&table)
-    );
-    env.store
-        .with_duckdb(|conn| {
-            conn.execute(&insert_sql, duckdb::params![])
-                .map_err(|e| duckdb_err("test_insert_extra_row", &e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .expect("insert extra row");
-
-    let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
-    let err = env
-        .store
-        .distribute(&project_conn, &env.project_root, "bad_rows", None)
-        .await
-        .expect_err("多行内容表必须被拒绝");
-    assert!(
-        matches!(err, InstanceOpError::Core(_)),
-        "应报存储错误，实际 {err:?}"
-    );
-    assert!(
-        format!("{err:?}").contains("应只有一行"),
-        "错误要说清原因，实际 {err:?}"
-    );
-
-    // 拒绝发生在读内容阶段，项目侧不该留下半成品文件，也不该有登记。
-    assert!(
-        !env.project_root
-            .join("resources")
-            .join("work/bad_rows")
-            .exists(),
-        "被拒绝时不得重建文件"
-    );
-    let pool = &env.project_pool;
-    let conn = pool.acquire().await.expect("acquire");
-    let inner = conn.inner().expect("inner");
-    let registered: i64 = inner
-        .query_row(
-            "SELECT count(*) FROM analytics_resources WHERE name = 'bad_rows'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("count rows");
-    assert_eq!(registered, 0, "被拒绝时不落任何项目登记");
-
-    let _ = fs::remove_dir_all(&env.dir);
-}
-
-/// 脚本提升到全局有体积上限：超了就在读内容之前拒绝，并指向「按数据文件归档」。
-///
-/// 上限的作用不是省磁盘，而是不让一段超大文本被整段读进内存、再落成全局库里的一条
-/// 巨型行——脚本承载的是定义（正常几百 KB），16 MiB 已是异常量级。边界取 `>`
-/// 而不是 `>=`：恰好等于上限仍然放行，这里用「上限 + 1 字节」证伪。
-#[tokio::test]
-async fn g011_oversized_script_is_rejected_before_reading() {
-    let env = create_test_env().await;
-    let script = env.dir.join("huge.sql");
-    fs::write(&script, vec![b'a'; (MAX_SCRIPT_BYTES + 1) as usize]).expect("write huge script");
-
-    let err = env
-        .store
-        .promote(&promote_req("huge_script", &script, PromoteKind::Script))
-        .await
-        .expect_err("超过上限必须被拒绝");
-    assert!(
-        matches!(err, InstanceOpError::Core(_)),
-        "应报存储错误，实际 {err:?}"
-    );
-    let text = format!("{err:?}");
-    assert!(
-        text.contains("超过上限"),
-        "错误要说清是体积问题，实际 {text}"
-    );
-    assert!(
-        text.contains("16 MiB"),
-        "错误要给出具体上限值，实际 {text}"
-    );
-    assert!(
-        text.contains("数据文件"),
-        "错误要指出替代路径（按数据文件归档），实际 {text}"
-    );
-
-    // 拒绝发生在读内容之前：全局库里既没有表（按表名前缀查），也没有登记行。
-    let any_table = env
-        .store
-        .with_duckdb(|conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT count(*) FROM information_schema.tables \
-                     WHERE table_name LIKE 'res_huge_script%'",
-                )
-                .map_err(|e| duckdb_err("prepare_huge_probe", &e.to_string()))?;
-            let count: i64 = stmt
-                .query_row([], |row| row.get(0))
-                .map_err(|e| duckdb_err("query_huge_probe", &e.to_string()))?;
-            Ok(count > 0)
-        })
-        .await
-        .expect("probe tables");
-    assert!(!any_table, "被拒绝时不得建全局表");
-    let global_rows: i64 = env
-        .store
-        .with_sqlite(|conn| {
-            conn.query_row(
-                "SELECT count(*) FROM analytics_resources \
-                 WHERE name = 'huge_script' AND scope = 'global'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_err("count_global_rows"))
-        })
-        .expect("count global rows");
-    assert_eq!(global_rows, 0, "被拒绝时不落任何全局登记");
-
-    let _ = fs::remove_dir_all(&env.dir);
-}
-
-/// 分发要在全局侧留回执：谁用过、用到第几版。
-///
-/// 项目侧登记只记「我来自哪」，全局侧原本完全不知道「我被谁用过」——于是
-/// 「删掉这个全局资源之前，有项目依赖它吗」没有依据。这里钉两件事：分发成功
-/// 即记一条；同一目标反复覆盖分发只累加次数，不另起一行。
-#[tokio::test]
-async fn g012_distribute_leaves_a_receipt_on_the_global_side() {
-    let env = create_test_env().await;
-    let script = env.dir.join("note.md");
-    fs::write(&script, "# 初稿\n").expect("write md");
-    let req = promote_req("dispatch_note", &script, PromoteKind::Script);
-    env.store.promote(&req).await.expect("promote script");
-
-    let project_conn = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
-    env.store
-        .distribute(&project_conn, &env.project_root, "dispatch_note", None)
-        .await
-        .expect("distribute");
-
-    let receipts = env
-        .store
-        .dispatched_projects("dispatch_note")
-        .await
-        .expect("receipts");
-    assert_eq!(receipts.len(), 1, "一次分发收口成一行：{receipts:?}");
-    let receipt = &receipts[0];
-    assert_eq!(receipt.target_name, "dispatch_note");
-    assert_eq!(receipt.version, 1, "回执要记分发时的全局版本");
-    assert_eq!(receipt.shape, DistributeShape::File);
-    assert_eq!(receipt.dispatch_count, 1);
-    assert!(
-        receipt.project_root.ends_with("project"),
-        "记的是目标项目根，实际 {}",
-        receipt.project_root
-    );
-    assert!(
-        !receipt.project_root.contains('\\'),
-        "项目根要规范化成 /，实际 {}",
-        receipt.project_root
-    );
-
-    // 覆盖分发一次：同一目标仍是一行，次数 +1。
-    env.store
-        .distribute_overwrite(&project_conn, &env.project_root, "dispatch_note", None)
-        .await
-        .expect("overwrite distribute");
-    let receipts = env
-        .store
-        .dispatched_projects("dispatch_note")
-        .await
-        .expect("receipts after overwrite");
-    assert_eq!(receipts.len(), 1, "重复分发不另起行：{receipts:?}");
-    assert_eq!(receipts[0].dispatch_count, 2, "次数要累加");
-
-    // 从没被分发过的全局存档：零行，而不是报错。
-    assert!(
-        env.store
-            .dispatched_projects("never_used")
-            .await
-            .expect("empty receipts")
-            .is_empty(),
-        "零行是「没人用过」这个事实，不是错误"
-    );
-
-    let _ = fs::remove_dir_all(&env.dir);
-}
-
 /// 来源链（A → 全局 → B）只记**直接上游**那一跳。
 ///
 /// 各层版本各自编号：A 的 v5 升级成全局 v1，再下发成 B 的 v1。三行各记自己的
@@ -730,7 +411,11 @@ async fn g013_origin_chain_points_at_the_immediate_upstream() {
     let mut req = promote_req("chain_orders", &csv, PromoteKind::DataFile);
     req.source_resource_id = Some("arp_origin_probe".to_string());
     req.source_version = Some(5);
-    let outcome = env.store.promote(&req).await.expect("promote");
+    let outcome = env
+        .store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
     assert_eq!(outcome.version, 1, "全局侧从自己的 v1 开始编号");
 
     // 全局行回指 A 的那一版。
@@ -780,43 +465,45 @@ async fn g013_origin_chain_points_at_the_immediate_upstream() {
     let _ = fs::remove_dir_all(&env.dir);
 }
 
-/// G2：一版一张表——同名第二次升级另起一张表，上一版那张**保留**。
-///
-/// 这是「回到上一版看数据」的前提：登记行逐版记着各自的 `analytics_table`，
-/// 表本身不删。覆盖式升级只软删旧登记，不碰旧表。
+/// 同名第二次升级：内容变了才追加版本，两版各自指向独立快照，旧快照保留。
 #[tokio::test]
 async fn g014_each_global_version_keeps_its_own_table() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("versioned_orders", &csv, PromoteKind::DataFile);
 
-    let first = env.store.promote(&req).await.expect("first promote");
+    let first = env
+        .store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("first promote");
     assert_eq!(first.version, 1);
     let first_table = read_global_table(&env, "versioned_orders").expect("first table");
 
+    fs::write(&csv, "id,sku,qty\n1,a,9\n2,b,8\n3,c,7\n").expect("rewrite csv");
     let second = env
         .store
-        .promote_overwrite(&req)
+        .promote_file_as_table_asset(&req, true)
         .await
         .expect("overwrite promote");
-    assert_eq!(second.version, 2, "覆盖接续版本链，不从 v1 重开");
+    assert_eq!(second.version, 2, "内容变化后追加版本 2");
     assert!(second.overwritten);
     let second_table = read_global_table(&env, "versioned_orders").expect("second table");
 
-    assert_ne!(first_table, second_table, "一版一张表：两版表名必须不同");
+    assert_ne!(first_table, second_table, "两版必须指向不同快照");
     assert!(
         env.store
             .table_exists(&first_table)
             .await
             .expect("probe first"),
-        "旧版表不能被删——那是回看上一版的唯一凭据"
+        "旧版快照不能被删——那是回看上一版的唯一凭据"
     );
     assert!(
         env.store
             .table_exists(&second_table)
             .await
             .expect("probe second"),
-        "新版表要真的建出来"
+        "新版快照要真的建出来"
     );
 
     let _ = fs::remove_dir_all(&env.dir);
@@ -843,7 +530,7 @@ async fn g015_table_source_promote_moves_every_row() {
 
     let req = PromoteRequest {
         name: "daily_orders".to_string(),
-        // 占位：导出层会把形态改写成 DataFile（表先搬成 parquet 再升级）。
+        // 表型升级：不经文件，直接同根 CTAS。
         kind: PromoteKind::DataFile,
         source_abs_path: env.project_root.join(".RSmeta/analytics.duckdb"),
         rel_path: None,
@@ -854,16 +541,23 @@ async fn g015_table_source_promote_moves_every_row() {
         source_table: Some("daily".to_string()),
         // 这一步只验搬运与来源链，不裁。
         keep_versions: None,
+        base_global_version: None,
     };
 
-    let outcome = crate::jobs::global::promote_table_from_project(&env.store, &project, &req, false)
+    let outcome = env
+        .store
+        .promote_table_from_project(&project, &req, false)
         .await
         .expect("promote table");
     assert_eq!(outcome.version, 1, "A 的 v5 升级成全局 v1（各层各自编号）");
     assert_eq!(outcome.row_count, Some(100), "整表搬运，不采样");
 
     let table = read_global_table(&env, "daily_orders").expect("表名");
-    let (rows, cols) = env.store.table_stats(&table).await.expect("stats");
+    let (rows, cols) = env
+        .store
+        .table_stats(&format!("rds_archive.{table}"))
+        .await
+        .expect("stats");
     assert_eq!(rows, Some(100), "全局表行数 = 项目表行数");
     assert_eq!(cols, Some(2));
 
@@ -888,6 +582,373 @@ async fn g015_table_source_promote_moves_every_row() {
         .expect("project stats");
     assert_eq!(rows, Some(100), "升级不动项目侧数据");
 
+    // 同名再升级：不覆盖时按登记冲突拒绝；覆盖时版本接续、旧表仍留库。
+    let conflict = env
+        .store
+        .promote_table_from_project(&project, &req, false)
+        .await;
+    assert!(
+        matches!(
+            conflict,
+            Err(InstanceOpError::Conflict {
+                field: ConflictField::Registry,
+                ..
+            })
+        ),
+        "同名表型升级应按登记层冲突拒绝：{conflict:?}"
+    );
+    // 改一行再覆盖：内容变了才产生新快照；同内容重复升级会复用 v1。
+    {
+        let mut guard = project.0.lock().await;
+        guard
+            .as_mut()
+            .expect("project conn")
+            .execute_batch("INSERT INTO daily SELECT 101, 101;")
+            .expect("add one row");
+    }
+    let overwritten = env
+        .store
+        .promote_table_from_project(&project, &req, true)
+        .await
+        .expect("overwrite table");
+    assert_eq!(overwritten.version, 2, "内容变化后覆盖接续版本号");
+    assert!(overwritten.overwritten, "覆盖结果要标记 overwritten");
+    let versions = read_global_version_tables(&env, "daily_orders");
+    assert_eq!(versions.len(), 2, "旧版本登记与表都保留");
+    assert!(
+        versions.iter().any(|(v, _)| *v == 1),
+        "v1 登记不能被覆盖删除：{versions:?}"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 表型历史版本恢复：新版本直接指向旧快照，零复制，不原地回滚。
+#[tokio::test]
+async fn g030_table_version_restore_reuses_the_old_snapshot() {
+    let env = create_test_env().await;
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let make =
+        |rows: i32| format!("CREATE TABLE daily AS SELECT i AS id FROM range(1, {rows}) r(i);");
+    {
+        let mut guard = project.0.lock().await;
+        guard
+            .as_mut()
+            .expect("project conn")
+            .execute_batch(&make(101))
+            .expect("create 100");
+    }
+    let req = PromoteRequest {
+        name: "restorable_orders".to_string(),
+        kind: PromoteKind::DataFile,
+        source_abs_path: env.project_root.join(".RSmeta/analytics.duckdb"),
+        rel_path: None,
+        content_hash: String::new(),
+        file_size: None,
+        source_resource_id: None,
+        source_version: None,
+        source_table: Some("daily".to_string()),
+        keep_versions: None,
+        base_global_version: None,
+    };
+    env.store
+        .promote_table_from_project(&project, &req, false)
+        .await
+        .expect("promote v1");
+    {
+        let mut guard = project.0.lock().await;
+        let conn = guard.as_mut().expect("project conn");
+        conn.execute_batch("DROP TABLE daily;").expect("drop daily");
+        conn.execute_batch(&make(51)).expect("create 50");
+    }
+    env.store
+        .promote_table_from_project(&project, &req, true)
+        .await
+        .expect("promote v2");
+
+    let v1_table = read_global_version_tables(&env, "restorable_orders")
+        .into_iter()
+        .find(|(version, _)| *version == 1)
+        .and_then(|(_, table)| table)
+        .expect("v1 表名");
+    let restored = env
+        .store
+        .restore_global_table_version("restorable_orders", 1)
+        .await
+        .expect("restore v1");
+    assert_eq!(restored.version, 3, "恢复生成新版本");
+    let active = read_global_table(&env, "restorable_orders").expect("active table");
+    assert_eq!(active, v1_table, "恢复直接指向 v1 旧快照，零复制");
+    let (rows, _) = env
+        .store
+        .table_stats(&format!("rds_archive.{active}"))
+        .await
+        .expect("stats");
+    assert_eq!(rows, Some(100), "恢复版本读到 v1 的 100 行");
+
+    let tables = read_global_version_tables(&env, "restorable_orders");
+    assert_eq!(tables.len(), 3, "v1 / v2 / v3 三条版本索引全留");
+    for table in tables
+        .iter()
+        .filter_map(|(_, table)| table.as_deref())
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        assert!(
+            env.store.table_exists(table).await.expect("exists"),
+            "历史快照不删"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 全局表快照：回收站只软删登记，永久删除才逐份清快照与版本索引。
+#[tokio::test]
+async fn g031_global_table_trash_purge_keeps_then_drops_snapshots() {
+    let env = create_test_env().await;
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let make = |rows: i32| {
+        format!(
+            "CREATE TABLE snap_orders AS SELECT i AS id, i + 1 AS qty FROM range(1, {rows}) r(i);"
+        )
+    };
+    {
+        let mut guard = project.0.lock().await;
+        guard
+            .as_mut()
+            .expect("project conn")
+            .execute_batch(&make(101))
+            .expect("create v1 source");
+    }
+    let req = PromoteRequest {
+        name: "snap_orders".to_string(),
+        kind: PromoteKind::DataFile,
+        source_abs_path: env.project_root.join(".RSmeta/analytics.duckdb"),
+        rel_path: None,
+        content_hash: String::new(),
+        file_size: None,
+        source_resource_id: None,
+        source_version: None,
+        source_table: Some("snap_orders".to_string()),
+        keep_versions: None,
+        base_global_version: None,
+    };
+    env.store
+        .promote_table_from_project(&project, &req, false)
+        .await
+        .expect("promote v1");
+    {
+        let mut guard = project.0.lock().await;
+        guard
+            .as_mut()
+            .expect("project conn")
+            .execute_batch("INSERT INTO snap_orders SELECT 101, 102;")
+            .expect("change source");
+    }
+    env.store
+        .promote_table_from_project(&project, &req, true)
+        .await
+        .expect("promote v2");
+
+    let snapshots = read_global_version_tables(&env, "snap_orders");
+    assert_eq!(snapshots.len(), 2, "两版各一份快照");
+    let tables: Vec<String> = snapshots
+        .into_iter()
+        .filter_map(|(_, table)| table)
+        .collect();
+    for table in &tables {
+        assert!(
+            env.store.table_exists(table).await.expect("exists"),
+            "物理快照在 {table}"
+        );
+    }
+
+    let trashed = env.store.trash_global("snap_orders").await.expect("trash");
+    assert_eq!(trashed.version, 2);
+    for table in &tables {
+        assert!(
+            env.store
+                .table_exists(table)
+                .await
+                .expect("exists after trash"),
+            "进回收站不删快照：{table}"
+        );
+    }
+    env.store
+        .restore_global("snap_orders")
+        .await
+        .expect("restore");
+    env.store.purge_global("snap_orders").await.expect("purge");
+
+    for table in &tables {
+        assert!(
+            env.store
+                .table_exists(table)
+                .await
+                .expect("exists after purge"),
+            "永久删除只清引用，物理快照等 GC：{table}"
+        );
+    }
+    let gc = env
+        .store
+        .gc_table_snapshots(std::time::Duration::ZERO)
+        .await
+        .expect("gc");
+    assert_eq!(gc.dropped, tables.len(), "无引用快照全被 GC 回收");
+    for table in &tables {
+        assert!(
+            !env.store
+                .table_exists(table)
+                .await
+                .expect("exists after gc"),
+            "GC 应清掉快照：{table}"
+        );
+    }
+    env.store
+        .with_sqlite(|conn| {
+            let rows: i64 = conn
+                .query_row("SELECT count(*) FROM table_asset_versions", [], |row| {
+                    row.get(0)
+                })
+                .map_err(sqlite_err("count_after_purge"))?;
+            assert_eq!(rows, 0, "版本索引随资产一起清掉");
+            Ok(())
+        })
+        .expect("purge cleanup");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 项目表资产的本体在 `analytics.rds_archive`：升级必须按限定名冻结，不能当成普通表。
+#[tokio::test]
+async fn g032_table_asset_promotes_from_project_archive_schema() {
+    let env = create_test_env().await;
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    {
+        let mut guard = project.0.lock().await;
+        guard
+            .as_mut()
+            .expect("project conn")
+            .execute_batch(
+                "CREATE SCHEMA IF NOT EXISTS rds_archive;
+                 CREATE TABLE rds_archive.arc_project AS
+                   SELECT i AS id FROM range(1, 21) r(i);",
+            )
+            .expect("create project snapshot");
+    }
+    let req = PromoteRequest {
+        name: "project_snapshot".to_string(),
+        kind: PromoteKind::DataFile,
+        source_abs_path: env.project_root.join(".RSmeta/analytics.duckdb"),
+        rel_path: None,
+        content_hash: String::new(),
+        file_size: None,
+        source_resource_id: Some("arp_project".to_string()),
+        source_version: Some(1),
+        // UI 对表资产传 `rds_archive.<物理快照>`。
+        source_table: Some("rds_archive.arc_project".to_string()),
+        keep_versions: None,
+        base_global_version: None,
+    };
+    let outcome = env
+        .store
+        .promote_table_from_project(&project, &req, false)
+        .await
+        .expect("promote project snapshot");
+    assert_eq!(outcome.version, 1);
+    assert_eq!(outcome.row_count, Some(20), "快照整表搬运");
+    let table = read_global_table(&env, "project_snapshot").expect("global table");
+    let (rows, _) = env
+        .store
+        .table_stats(&format!("rds_archive.{table}"))
+        .await
+        .expect("global stats");
+    assert_eq!(rows, Some(20));
+    assert_eq!(
+        env.store
+            .global_table_head("project_snapshot")
+            .expect("head")
+            .expect("asset")
+            .analytics_table,
+        table,
+        "全局 head 指向自己的全局快照，不是项目表"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 全局显示名改动后，项目引用仍按稳定 asset_id 找到同一个快照并可固化。
+#[tokio::test]
+async fn g033_global_rename_keeps_reference_and_solidify() {
+    let env = create_test_env().await;
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let csv = write_csv(&env.dir);
+    let promoted = env
+        .store
+        .promote_file_as_table_asset(
+            &promote_req("rename_orders", &csv, PromoteKind::DataFile),
+            false,
+        )
+        .await
+        .expect("promote");
+    let referenced = env
+        .store
+        .reference_to_project(
+            &project,
+            &env.project_root,
+            "rename_orders",
+            promoted.version,
+            None,
+        )
+        .await
+        .expect("reference");
+    let asset_id = env
+        .store
+        .active_global_asset_id("rename_orders")
+        .expect("asset id")
+        .expect("asset exists");
+    env.store
+        .with_sqlite(|conn| {
+            conn.execute(
+                "UPDATE analytics_resources SET name = 'rename_orders_new' \
+                 WHERE id = ?1 AND scope = 'global'",
+                rusqlite::params![&asset_id],
+            )
+            .map(|_| ())
+            .map_err(|error| {
+                shared::error::CoreError::common(shared::error::CommonError::General(format!(
+                    "rename global: {error}"
+                )))
+            })
+        })
+        .expect("rename global");
+
+    assert_eq!(
+        env.store
+            .global_name_by_asset_id(&asset_id)
+            .expect("name by id"),
+        Some("rename_orders_new".to_string())
+    );
+    assert_eq!(
+        env.store
+            .active_ref_count("rename_orders_new")
+            .expect("active ref"),
+        1,
+        "改名后 pin 仍挂在同一 asset_id 上"
+    );
+    let solid = env
+        .store
+        .solidify_ref_version(
+            &project,
+            &env.project_root,
+            &referenced.resource_id,
+            1,
+            "rename_orders_solid",
+        )
+        .await
+        .expect("solidify after rename");
+    assert_eq!(solid.version, 1);
+
     let _ = fs::remove_dir_all(&env.dir);
 }
 
@@ -898,9 +959,13 @@ fn read_global_version_tables(env: &TestEnv, name: &str) -> Vec<(i32, Option<Str
             let mut stmt = conn
                 .prepare(
                     r#"
-                    SELECT version, analytics_table FROM analytics_resources
-                    WHERE name = ?1 AND scope = 'global'
-                    ORDER BY version DESC
+                    SELECT COALESCE(tav.version, ar.version),
+                           COALESCE(ts.physical_table, ar.analytics_table)
+                    FROM analytics_resources ar
+                    LEFT JOIN table_asset_versions tav ON tav.asset_id = ar.id
+                    LEFT JOIN table_snapshots ts ON ts.snapshot_id = tav.snapshot_id
+                    WHERE ar.name = ?1 AND ar.scope = 'global'
+                    ORDER BY COALESCE(tav.version, ar.version) DESC
                     "#,
                 )
                 .map_err(sqlite_err("read_global_version_tables"))?;
@@ -915,19 +980,25 @@ fn read_global_version_tables(env: &TestEnv, name: &str) -> Vec<(i32, Option<Str
         .expect("读版本表")
 }
 
-/// 一版一张表会随版本线性增长，`KeepVersions` 表型裁剪的语义必须与项目侧副本裁剪一致：
-/// **当前版本那张表是本体、永远留**；`keep` 数的是历史份数；登记行与版本快照一条不动。
-/// 内容被清掉之后，分发要给人话而不是 DuckDB 的 Catalog Error。
+/// 快照会随版本增长，`KeepVersions` 只裁**版本行**、不碰 manifest 与登记：
+/// **当前版本行 + 最近 N 份历史**留；物理快照由 GC 按引用计数回收。
 #[tokio::test]
 async fn g016_version_table_pruning_keeps_current_and_says_why() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
 
-    // 覆盖式连升三版：同名链版本接续，各自一张表。
+    // 覆盖式连升三版：每版数据都不同，各自一张快照。
     for round in 0..3 {
-        let mut req = promote_req("pruned_orders", &csv, PromoteKind::DataFile);
-        req.content_hash = format!("hash_round_{round}");
-        env.store.promote_overwrite(&req).await.expect("promote");
+        fs::write(
+            &csv,
+            format!("id,sku,qty\n1,a,{round}\n2,b,{round}\n3,c,{round}\n"),
+        )
+        .expect("rewrite csv");
+        let req = promote_req("pruned_orders", &csv, PromoteKind::DataFile);
+        env.store
+            .promote_file_as_table_asset(&req, true)
+            .await
+            .expect("promote");
     }
 
     let before = read_global_version_tables(&env, "pruned_orders");
@@ -940,7 +1011,7 @@ async fn g016_version_table_pruning_keeps_current_and_says_why() {
         );
     }
 
-    // Keep(1)：留当前版 + 最近 1 份历史，删最老那版。
+    // Keep(1)：留当前版 + 最近 1 份历史，删最老那版的版本行。
     let removed = env
         .store
         .prune_version_tables("pruned_orders", crate::model::KeepVersions::Keep(1))
@@ -949,28 +1020,27 @@ async fn g016_version_table_pruning_keeps_current_and_says_why() {
     assert_eq!(removed, 1, "三版留两版");
 
     let after = read_global_version_tables(&env, "pruned_orders");
-    assert_eq!(after.len(), 3, "登记行一条不删（版本元数据永久保留）");
+    assert_eq!(after.len(), 2, "只留当前 + 最近 1 份历史版本行");
+    let version_rows: i64 = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row("SELECT count(*) FROM table_asset_versions", [], |row| {
+                row.get(0)
+            })
+            .map_err(sqlite_err("count_after_prune"))
+        })
+        .expect("count versions");
+    assert_eq!(version_rows, 2, "当前 + 最近 1 份历史版本行");
+    for (_, table) in &before {
     assert!(
         env.store
-            .table_exists(after[0].1.as_deref().expect("表名"))
+                .table_exists(table.as_deref().expect("表名"))
             .await
             .expect("exists"),
-        "当前版本是本体，必须留"
+            "裁剪只删版本行，物理快照交给 GC：{:?}",
+            table
     );
-    assert!(
-        env.store
-            .table_exists(after[1].1.as_deref().expect("表名"))
-            .await
-            .expect("exists"),
-        "最近一份历史留着"
-    );
-    assert!(
-        !env.store
-            .table_exists(after[2].1.as_deref().expect("表名"))
-            .await
-            .expect("exists"),
-        "最老那版的内容已清"
-    );
+    }
 
     // 当前版本还能分发。
     let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
@@ -981,7 +1051,10 @@ async fn g016_version_table_pruning_keeps_current_and_says_why() {
 
     // 最新那版的内容也没了（手工删 / 裁剪边界）时，分发必须说是「策略清掉的」。
     let current = after[0].1.as_deref().expect("表名").to_string();
-    env.store.drop_global_table(&current).await.expect("drop");
+    env.store
+        .drop_global_archive_table("rds_archive", &current)
+        .await
+        .expect("drop");
     let err = env
         .store
         .distribute(&project, &env.project_root, "pruned_orders", None)
@@ -1002,12 +1075,17 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
     let csv = write_csv(&env.dir);
     let req = promote_req("delete_me", &csv, PromoteKind::DataFile);
 
-    let first = env.store.promote(&req).await.expect("promote v1");
+    let first = env
+        .store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote v1");
     assert_eq!(first.version, 1);
     let first_table = read_global_table(&env, "delete_me").expect("v1 table");
+    fs::write(&csv, "id,sku,qty\n1,a,1\n2,b,2\n3,c,3\n").expect("rewrite csv");
     let second = env
         .store
-        .promote_overwrite(&req)
+        .promote_file_as_table_asset(&req, true)
         .await
         .expect("promote v2");
     assert_eq!(second.version, 2);
@@ -1033,19 +1111,42 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
         })
         .expect("insert dispatch");
 
-    let outcome = env.store.delete_global("delete_me").await.expect("delete");
+    // 只走回收站路径：先移入（写 manifest、软删登记），再永久删除。
+    env.store.trash_global("delete_me").await.expect("trash");
+    let outcome = env.store.purge_global("delete_me").await.expect("purge");
     assert_eq!(outcome.name, "delete_me");
     assert_eq!(outcome.versions, 2, "两版登记都要删");
-    assert_eq!(outcome.tables, 2, "一版一张表，两张都要删");
+    assert_eq!(outcome.tables, 2, "两版快照都要删");
     assert_eq!(outcome.projects, 1, "回执在删除前数过");
 
+    // 永久删除只清引用；物理快照由 GC 在无引用后回收。
     assert!(
-        !env.store.table_exists(&first_table).await.expect("probe v1"),
-        "v1 表应已删除"
+        env.store
+            .table_exists(&first_table)
+            .await
+            .expect("probe v1"),
+        "purge 不直接 DROP，等 GC"
+    );
+    let gc = env
+        .store
+        .gc_table_snapshots(std::time::Duration::ZERO)
+        .await
+        .expect("gc");
+    assert_eq!(gc.dropped, 2, "两版快照都已无引用，GC 全回收");
+
+    assert!(
+        !env.store
+            .table_exists(&first_table)
+            .await
+            .expect("probe v1"),
+        "v1 表应已由 GC 删除"
     );
     assert!(
-        !env.store.table_exists(&second_table).await.expect("probe v2"),
-        "v2 表应已删除"
+        !env.store
+            .table_exists(&second_table)
+            .await
+            .expect("probe v2"),
+        "v2 表应已由 GC 删除"
     );
 
     let (rows, versions, dispatches) = env
@@ -1082,9 +1183,197 @@ async fn g017_delete_global_drops_tables_and_registry_only() {
 
     // 删过的名字再删一次：明确「资源不存在」，不是静默成功。
     assert!(matches!(
-        env.store.delete_global("delete_me").await,
+        env.store.trash_global("delete_me").await,
         Err(InstanceOpError::NotFound { .. })
     ));
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g023_trash_restore_keeps_table_until_purge() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("trash_orders", &csv, PromoteKind::DataFile);
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
+    let table = read_global_table(&env, "trash_orders").expect("table");
+
+    let trashed = env.store.trash_global("trash_orders").await.expect("trash");
+    assert_eq!(trashed.name, "trash_orders");
+    assert_eq!(trashed.version, 1);
+    assert_eq!(trashed.analytics_table.as_deref(), Some(table.as_str()));
+    assert!(
+        env.store.table_exists(&table).await.expect("probe"),
+        "移入回收站只软删登记，表必须留库"
+    );
+    assert!(
+        list_global_resources(&env.store)
+            .expect("list")
+            .iter()
+            .all(|row| row.name != "trash_orders"),
+        "回收站条目不应出现在活跃列表"
+    );
+
+    let restored = env
+        .store
+        .restore_global("trash_orders")
+        .await
+        .expect("restore");
+    assert_eq!(restored.version, 1);
+    assert_eq!(
+        list_global_resources(&env.store)
+            .expect("list")
+            .iter()
+            .filter(|row| row.name == "trash_orders")
+            .count(),
+        1,
+        "恢复后登记回到活跃列表"
+    );
+    assert!(!trashed.trash_dir.exists(), "恢复成功后回收站条目要清掉");
+
+    // 第二次移入后手工 DROP 表：恢复必须拒绝，而不是复活一条指向空表的登记。
+    let trashed = env
+        .store
+        .trash_global("trash_orders")
+        .await
+        .expect("trash again");
+    env.store
+        .drop_global_archive_table("rds_archive", &table)
+        .await
+        .expect("drop table");
+    let refused = env.store.restore_global("trash_orders").await;
+    assert!(
+        matches!(refused, Err(InstanceOpError::Core(_))),
+        "表已不在时应拒绝恢复：{refused:?}"
+    );
+
+    env.store.purge_global("trash_orders").await.expect("purge");
+    assert!(
+        !env.store.table_exists(&table).await.expect("probe"),
+        "永久删除后表必须消失"
+    );
+    assert!(!trashed.trash_dir.exists(), "永久删除要清掉回收站条目");
+    assert!(matches!(
+        env.store.purge_global("trash_orders").await,
+        Err(InstanceOpError::NotFound { .. })
+    ));
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g028_global_trash_lists_restores_and_purges() {
+    let env = create_test_env().await;
+    for name in ["trash_a", "trash_b"] {
+        let rel = format!("global/{name}.csv");
+        let (source, manifest_id) = seed_project_manifest(&env, &rel, b"id,qty\n1,10\n").await;
+        env.store
+            .publish_file(&publish_req(name, &env, source, manifest_id, &rel, None))
+            .await
+            .expect("publish");
+    }
+    env.store.trash_global("trash_a").await.expect("trash a");
+    env.store.trash_global("trash_b").await.expect("trash b");
+
+    let listed = env.store.list_global_trash().expect("list trash");
+    let mut names: Vec<_> = listed.iter().map(|entry| entry.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, vec!["trash_a", "trash_b"]);
+    assert!(
+        listed.iter().all(|entry| entry.has_file_payload),
+        "文件资产进回收站要带当前物化缓存"
+    );
+
+    env.store
+        .restore_global("trash_a")
+        .await
+        .expect("restore a");
+    let left = env.store.list_global_trash().expect("list after restore");
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].name, "trash_b");
+
+    env.store.purge_global("trash_b").await.expect("purge b");
+    assert!(
+        env.store
+            .list_global_trash()
+            .expect("list after purge")
+            .is_empty(),
+        "永久删除后回收站列表要清掉"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g029_empty_global_trash_skips_pinned_entries() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("pinned_empty", &csv, PromoteKind::DataFile);
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
+    env.store.trash_global("pinned_empty").await.expect("trash");
+    // 进回收站后再被项目 pin：清空必须跳过，不能把仍被引用的登记抹掉。
+    pin_ref(&env, "arp_pinned_empty", 1, "pinned_empty", 1);
+
+    let (purged, skipped) = env.store.empty_global_trash().await.expect("empty");
+    assert_eq!(purged, 0);
+    assert_eq!(skipped, 1);
+    assert_eq!(
+        env.store.list_global_trash().expect("list").len(),
+        1,
+        "被 pin 的条目仍留在回收站"
+    );
+
+    env.store
+        .release_global_ref(&env.project_root, "arp_pinned_empty", 1)
+        .expect("release");
+    let (purged, skipped) = env
+        .store
+        .empty_global_trash()
+        .await
+        .expect("empty after release");
+    assert_eq!((purged, skipped), (1, 0));
+    assert!(env.store.list_global_trash().expect("list").is_empty());
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g024_trash_refuses_while_a_project_pins_the_version() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    let req = promote_req("pinned_trash", &csv, PromoteKind::DataFile);
+    env.store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
+    pin_ref(&env, "arp_ref_trash", 1, "pinned_trash", 1);
+
+    let refused = env.store.trash_global("pinned_trash").await;
+    assert!(
+        matches!(refused, Err(InstanceOpError::Referenced { refs: 1, .. })),
+        "被项目 pin 的全局版本不能移入回收站：{refused:?}"
+    );
+
+    env.store
+        .release_global_ref(&env.project_root, "arp_ref_trash", 1)
+        .expect("release pin");
+    let trashed = env
+        .store
+        .trash_global("pinned_trash")
+        .await
+        .expect("trash after release");
+    env.store
+        .restore_global("pinned_trash")
+        .await
+        .expect("restore");
+    env.store.purge_global("pinned_trash").await.expect("purge");
+    assert!(!trashed.trash_dir.exists(), "永久删除后回收站条目要清掉");
 
     let _ = fs::remove_dir_all(&env.dir);
 }
@@ -1096,12 +1385,17 @@ fn pin_ref(
     global_name: &str,
     global_version: i32,
 ) {
+    let global_asset_id = env
+        .store
+        .active_global_asset_id(global_name)
+        .expect("resolve global asset id")
+        .expect("global asset exists");
     env.store
         .pin_global_ref(&crate::global::GlobalRefPin {
             project_root: env.project_root.to_string_lossy().replace('\\', "/"),
             project_resource_id: resource_id.to_string(),
             project_version,
-            global_name: global_name.to_string(),
+            global_asset_id,
             global_version,
         })
         .expect("pin global ref");
@@ -1115,9 +1409,16 @@ async fn g018_prune_keeps_only_pinned_versions() {
     let csv = write_csv(&env.dir);
 
     for round in 0..3 {
-        let mut req = promote_req("ref_guard_orders", &csv, PromoteKind::DataFile);
-        req.content_hash = format!("hash_ref_round_{round}");
-        env.store.promote_overwrite(&req).await.expect("promote");
+        fs::write(
+            &csv,
+            format!("id,sku,qty\n1,a,{round}\n2,b,{round}\n3,c,{round}\n"),
+        )
+        .expect("rewrite csv");
+        let req = promote_req("ref_guard_orders", &csv, PromoteKind::DataFile);
+        env.store
+            .promote_file_as_table_asset(&req, true)
+            .await
+            .expect("promote");
     }
     let versions = read_global_version_tables(&env, "ref_guard_orders");
     assert_eq!(versions.len(), 3);
@@ -1132,14 +1433,28 @@ async fn g018_prune_keeps_only_pinned_versions() {
         .prune_version_tables("ref_guard_orders", crate::model::KeepVersions::MetadataOnly)
         .await
         .expect("prune");
-    assert_eq!(removed, 1, "只删中间那版，最老那版有 pin");
+    assert_eq!(removed, 1, "只删中间那版的版本行，最老那版有 pin");
     assert!(
         env.store.table_exists(&oldest_table).await.expect("exists"),
-        "被 pin 的最老版本必须保留"
+        "裁剪不碰物理快照：被 pin 的最老版本仍在"
     );
     assert!(
+        env.store.table_exists(&middle_table).await.expect("exists"),
+        "中间版本行已删，但物理快照交给 GC，GC 未跑前仍在"
+    );
+    let gc = env
+        .store
+        .gc_table_snapshots(std::time::Duration::ZERO)
+        .await
+        .expect("gc");
+    assert_eq!(gc.dropped, 1, "中间版本已无引用，GC 回收一张快照");
+    assert!(
         !env.store.table_exists(&middle_table).await.expect("exists"),
-        "未被 pin 的中间版本可以裁掉"
+        "无引用的中间快照被 GC 回收"
+    );
+    assert!(
+        env.store.table_exists(&oldest_table).await.expect("exists"),
+        "被 pin 的最老版本仍不可回收"
     );
 
     // 释放这一版 pin 后再裁，最老版本才允许被删。
@@ -1153,10 +1468,16 @@ async fn g018_prune_keeps_only_pinned_versions() {
         .prune_version_tables("ref_guard_orders", crate::model::KeepVersions::MetadataOnly)
         .await
         .expect("prune after release");
-    assert!(removed >= 1, "释放 pin 后至少会删掉最老那版");
+    assert!(removed >= 1, "释放 pin 后至少会删掉最老那版的版本行");
+    let gc = env
+        .store
+        .gc_table_snapshots(std::time::Duration::ZERO)
+        .await
+        .expect("gc after release");
+    assert!(gc.dropped >= 1, "释放 pin 后历史快照可被 GC 回收");
     assert!(
         !env.store.table_exists(&oldest_table).await.expect("exists"),
-        "释放 pin 后历史版本可裁"
+        "释放 pin 后历史快照被 GC 回收"
     );
 
     let _ = fs::remove_dir_all(&env.dir);
@@ -1169,15 +1490,19 @@ async fn g019_delete_global_blocked_by_active_ref() {
     let env = create_test_env().await;
     let csv = write_csv(&env.dir);
     let req = promote_req("ref_delete_me", &csv, PromoteKind::DataFile);
-    let outcome = env.store.promote(&req).await.expect("promote");
+    let outcome = env
+        .store
+        .promote_file_as_table_asset(&req, false)
+        .await
+        .expect("promote");
     let table = read_global_table(&env, "ref_delete_me").expect("table");
 
     pin_ref(&env, "arp_ref_delete", 1, "ref_delete_me", outcome.version);
     let err = env
         .store
-        .delete_global("ref_delete_me")
+        .trash_global("ref_delete_me")
         .await
-        .expect_err("有引用必须拒绝删除");
+        .expect_err("有引用必须拒绝移入回收站");
     assert!(matches!(err, InstanceOpError::Referenced { refs: 1, .. }));
     assert!(
         env.store.table_exists(&table).await.expect("exists"),
@@ -1191,15 +1516,27 @@ async fn g019_delete_global_blocked_by_active_ref() {
     env.store
         .release_global_ref(&env.project_root, "arp_ref_delete", 1)
         .expect("release");
+    env.store
+        .trash_global("ref_delete_me")
+        .await
+        .expect("trash");
     let deleted = env
         .store
-        .delete_global("ref_delete_me")
+        .purge_global("ref_delete_me")
         .await
-        .expect("delete");
+        .expect("purge");
     assert_eq!(deleted.versions, 1);
     assert!(
+        env.store.table_exists(&table).await.expect("exists"),
+        "purge 只清引用，物理快照等 GC"
+    );
+    env.store
+        .gc_table_snapshots(std::time::Duration::ZERO)
+        .await
+        .expect("gc");
+    assert!(
         !env.store.table_exists(&table).await.expect("exists"),
-        "释放引用后删除成功"
+        "释放引用后 GC 才回收物理表"
     );
 
     let _ = fs::remove_dir_all(&env.dir);
@@ -1214,7 +1551,10 @@ async fn g020_pin_ref_upserts_version_and_reactivates() {
     for round in 0..2 {
         let mut req = promote_req("ref_upsert_orders", &csv, PromoteKind::DataFile);
         req.content_hash = format!("hash_upsert_{round}");
-        env.store.promote_overwrite(&req).await.expect("promote");
+        env.store
+            .promote_file_as_table_asset(&req, true)
+            .await
+            .expect("promote");
     }
 
     pin_ref(&env, "arp_ref_upsert", 1, "ref_upsert_orders", 1);
@@ -1268,7 +1608,10 @@ async fn g021_reference_asset_and_solidify_selected_version() {
     let csv = write_csv(&env.dir);
     let v1 = env
         .store
-        .promote(&promote_req("ref_orders", &csv, PromoteKind::DataFile))
+        .promote_file_as_table_asset(
+            &promote_req("ref_orders", &csv, PromoteKind::DataFile),
+            false,
+        )
         .await
         .expect("promote v1");
     assert_eq!(v1.version, 1);
@@ -1320,10 +1663,12 @@ async fn g021_reference_asset_and_solidify_selected_version() {
     assert_eq!(kind, "table_ref");
     assert!(table.is_none(), "引用资产不能登记本地表名");
     assert_eq!(origin_kind.as_deref(), Some("global"));
-    assert!(origin_ref
+    assert!(
+        origin_ref
         .as_deref()
         .unwrap_or("")
-        .contains("\"version\":1"));
+            .contains("\"version\":1")
+    );
     assert_eq!(version, 1);
     assert_eq!(alias.as_deref(), Some("订单引用"));
     assert!(
@@ -1359,7 +1704,7 @@ async fn g021_reference_asset_and_solidify_selected_version() {
         .expect("link folder");
     let tag = store
         .create_tag(crate::store::rows::CreateTagRequest {
-            name: "全局引用标签".to_string(),
+            name: format!("全局引用标签{}", Uuid::new_v4().simple()),
             color: None,
             icon: None,
             scope: "global".to_string(),
@@ -1375,7 +1720,10 @@ async fn g021_reference_asset_and_solidify_selected_version() {
     fs::write(&csv, "id,sku,qty\n1,a,10\n2,b,20\n").expect("rewrite csv");
     let v2 = env
         .store
-        .promote_overwrite(&promote_req("ref_orders", &csv, PromoteKind::DataFile))
+        .promote_file_as_table_asset(
+            &promote_req("ref_orders", &csv, PromoteKind::DataFile),
+            true,
+        )
         .await
         .expect("promote v2");
     assert_eq!(v2.version, 2);
@@ -1493,6 +1841,9 @@ async fn g021_reference_asset_and_solidify_selected_version() {
     };
     assert_eq!(rows, vec![1, 2, 3], "固化的是选中的 v1，不是当前 v2");
 
+    // 标签定义落在 RDS_HOME 的全局库（不是测试临时目录），用例结束要删掉，
+    // 否则重复跑会在全局库里越堆越多。
+    store.delete_tag(&tag.id).await.expect("delete global tag");
     let _ = fs::remove_dir_all(&env.dir);
 }
 
@@ -1504,7 +1855,10 @@ async fn g022_solidify_failure_keeps_pin_and_ref() {
     let csv = write_csv(&env.dir);
     let v1 = env
         .store
-        .promote(&promote_req("ref_conflict", &csv, PromoteKind::DataFile))
+        .promote_file_as_table_asset(
+            &promote_req("ref_conflict", &csv, PromoteKind::DataFile),
+            false,
+        )
         .await
         .expect("promote v1");
     let first = env
@@ -1569,6 +1923,588 @@ async fn g022_solidify_failure_keeps_pin_and_ref() {
             .expect("read ref row")
     };
     assert_eq!((kind.as_str(), version), ("table_ref", 1));
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+// ==================== M4：全局 file-first ====================
+
+async fn seed_project_manifest(env: &TestEnv, rel: &str, bytes: &[u8]) -> (PathBuf, String) {
+    let path = env.project_root.join("resources").join(rel);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create project resources dir");
+    }
+    fs::write(&path, bytes).expect("write project file");
+    let cas = crate::payload::cas::CasStore::new(&env.project_root);
+    let object = cas.put_file(&path).await.expect("put project file");
+    let manifest =
+        crate::payload::manifest::FileManifest::single_file(rel, object.hash, object.size, None);
+    let manifest_id = cas.put_manifest(&manifest).await.expect("put manifest");
+    (path, manifest_id)
+}
+
+fn publish_req(
+    name: &str,
+    env: &TestEnv,
+    source: PathBuf,
+    manifest_id: String,
+    rel: &str,
+    base: Option<i32>,
+) -> PublishFileRequest {
+    PublishFileRequest {
+        name: name.to_string(),
+        source_project_root: env.project_root.clone(),
+        manifest_id: Some(manifest_id),
+        source_abs_path: Some(source),
+        rel_path: Some(rel.to_string()),
+        source_resource_id: Some("arp_source".to_string()),
+        source_version: Some(1),
+        base_global_version: base,
+    }
+}
+
+fn read_global_row(
+    env: &TestEnv,
+    name: &str,
+    version: Option<i32>,
+) -> (String, Option<String>, String, Option<String>) {
+    env.store
+        .with_sqlite(|conn| {
+            let row = match version {
+                Some(version) => conn.query_row(
+                    "SELECT kind, analytics_table, content_hash, file_rel_path \
+                     FROM analytics_resources WHERE name = ?1 AND scope = 'global' AND version = ?2",
+                    rusqlite::params![name, version],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?,
+                None => conn.query_row(
+                    "SELECT kind, analytics_table, content_hash, file_rel_path \
+                     FROM analytics_resources WHERE name = ?1 AND scope = 'global' \
+                     AND deleted_at IS NULL ORDER BY version DESC LIMIT 1",
+                    rusqlite::params![name],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?,
+            };
+            Ok(row)
+        })
+        .expect("read global file row")
+}
+
+#[tokio::test]
+async fn g090_publish_file_is_file_first_and_base_guarded() {
+    let env = create_test_env().await;
+    let (source, manifest_id) =
+        seed_project_manifest(&env, "global/orders.csv", b"id,qty\n1,10\n").await;
+
+    let first = env
+        .store
+        .publish_file(&publish_req(
+            "orders_file",
+            &env,
+            source.clone(),
+            manifest_id.clone(),
+            "global/orders.csv",
+            None,
+        ))
+        .await
+        .expect("publish v1");
+    assert_eq!(first.version, 1);
+    assert_eq!(first.content_class, "tabular");
+
+    let row = read_global_row(&env, "orders_file", None);
+    assert_eq!(row.0, "file", "全局文件行必须是 file");
+    assert!(row.1.is_none(), "文件行不得有 analytics_table");
+    assert_eq!(row.2, first.content_hash);
+    assert_eq!(row.3.as_deref(), Some("global/orders.csv"));
+
+    let manifest: String = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT manifest_id FROM file_asset_versions WHERE resource_id = ?1 AND version = 1",
+                rusqlite::params![first.resource_id],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_err("read_global_manifest"))
+        })
+        .expect("global file version");
+    assert_eq!(manifest, manifest_id);
+    let current = env.dir.join("global/resources/global/orders.csv");
+    assert_eq!(
+        fs::read(&current).expect("current cache"),
+        b"id,qty\n1,10\n"
+    );
+
+    // 没带 base 的同名发布不覆盖 head，只报 StaleBase。
+    let stale = env
+        .store
+        .publish_file(&publish_req(
+            "orders_file",
+            &env,
+            source.clone(),
+            manifest_id.clone(),
+            "global/orders.csv",
+            None,
+        ))
+        .await
+        .expect_err("missing base must conflict");
+    assert!(
+        matches!(
+            stale,
+            InstanceOpError::StaleBase {
+                base: None,
+                head: 1,
+                ..
+            }
+        ),
+        "应报 base 落后：{stale:?}"
+    );
+
+    // base = 1 才追加 v2；内容变化仍走字节 hash。
+    let (source2, manifest2) =
+        seed_project_manifest(&env, "global/orders-v2.csv", b"id,qty\n1,11\n").await;
+    let second = env
+        .store
+        .publish_file(&publish_req(
+            "orders_file",
+            &env,
+            source2,
+            manifest2,
+            "global/orders.csv",
+            Some(1),
+        ))
+        .await
+        .expect("publish v2");
+    assert_eq!(second.version, 2);
+    assert_ne!(
+        second.content_hash, first.content_hash,
+        "改字节必须换 content_hash"
+    );
+    let chain = env
+        .store
+        .global_file_versions("orders_file")
+        .expect("read global file version chain");
+    assert_eq!(chain.len(), 2, "两版文件都要出现在版本链里");
+    assert_eq!(chain[0].version, 1);
+    assert_eq!(chain[1].version, 2);
+    assert_eq!(chain[0].parent_version, None);
+    assert_eq!(chain[1].parent_version, Some(1));
+    assert!(!chain[0].content_pruned && !chain[1].content_pruned);
+    assert!(
+        chain[0].created_at.timestamp() > 0,
+        "created_at 必须解析成真实时间"
+    );
+    let row = read_global_row(&env, "orders_file", None);
+    assert_eq!(row.0, "file");
+    assert!(row.1.is_none());
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g091_binary_global_file_has_no_table() {
+    let env = create_test_env().await;
+    let source = env.dir.join("blob.bin");
+    fs::write(&source, [0_u8, 159, 146, 150, 255]).expect("write binary");
+    let req = PublishFileRequest {
+        name: "blob_file".to_string(),
+        source_project_root: env.project_root.clone(),
+        manifest_id: None,
+        source_abs_path: Some(source),
+        rel_path: Some("binary/blob.bin".to_string()),
+        source_resource_id: None,
+        source_version: None,
+        base_global_version: None,
+    };
+    let out = env.store.publish_file(&req).await.expect("publish binary");
+    assert_eq!(out.content_class, "binary");
+    let row = read_global_row(&env, "blob_file", None);
+    assert_eq!(row.0, "file");
+    assert!(row.1.is_none(), "二进制全局文件不能建表");
+    assert_eq!(
+        fs::read(env.dir.join("global/resources/binary/blob.bin")).expect("binary cache"),
+        [0_u8, 159, 146, 150, 255]
+    );
+
+    // 全局库里没有这条资产对应的物理表（表名不会等于资产名）。
+    assert!(
+        !env.store
+            .table_exists("blob_file")
+            .await
+            .expect("table exists"),
+        "二进制全局文件不能建表"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g092_global_checkout_creates_lease_and_blocks_purge() {
+    let env = create_test_env().await;
+    let (source, manifest_id) = seed_project_manifest(&env, "global/data.csv", b"a,b\n1,2\n").await;
+    env.store
+        .publish_file(&publish_req(
+            "checkout_file",
+            &env,
+            source,
+            manifest_id,
+            "global/data.csv",
+            None,
+        ))
+        .await
+        .expect("publish");
+    fs::create_dir_all(env.project_root.join("scratchpad")).expect("scratchpad");
+
+    let project = crate::store::AnalyticsResourceStore::new(env.project_pool.clone());
+    let out = env
+        .store
+        .checkout_file(
+            &project,
+            &env.project_root,
+            "checkout_file",
+            None,
+            "global/data.csv",
+        )
+        .await
+        .expect("checkout");
+    assert_eq!(out.content_hash.len(), 64);
+    assert!(
+        env.project_root
+        .join("scratchpad/global/data.csv")
+            .is_file()
+    );
+    let lease = project
+        .active_lease("global:checkout_file")
+        .await
+        .expect("active lease")
+        .expect("lease exists");
+    assert_eq!(lease.base_scope, "global");
+    assert_eq!(lease.base_version, 1);
+
+    let second = env
+        .store
+        .checkout_file(
+            &project,
+            &env.project_root,
+            "checkout_file",
+            None,
+            "global/data-2.csv",
+        )
+        .await
+        .expect_err("second checkout must be refused");
+    assert!(
+        matches!(second, InstanceOpError::LeaseActive { .. }),
+        "第二次取回应报已有 lease：{second:?}"
+    );
+    assert!(
+        !env.project_root
+        .join("scratchpad/global/data-2.csv")
+            .exists()
+    );
+
+    let purge = env
+        .store
+        .purge_global("checkout_file")
+        .await
+        .expect_err("active lease must block purge");
+    assert!(
+        matches!(purge, InstanceOpError::LeaseActive { .. }),
+        "有活跃取回时 purge 必须拒绝：{purge:?}"
+    );
+
+    // 归档后结清：项目侧先消费，再关全局侧；之后同一资产可以再次取回。
+    project
+        .consume_lease(&lease.lease_id, 1)
+        .await
+        .expect("consume project lease");
+    env.store
+        .consume_checkout_lease("checkout_file", &env.project_root, 1)
+        .await
+        .expect("consume global lease");
+    assert!(
+        project
+            .active_lease("global:checkout_file")
+            .await
+            .expect("read active")
+            .is_none(),
+        "项目侧 active 租约应已结清"
+    );
+    env.store
+        .checkout_file(
+            &project,
+            &env.project_root,
+            "checkout_file",
+            None,
+            "global/data-3.csv",
+        )
+        .await
+        .expect("结清后可以再次取回");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+/// 表资产 fork：父 head 不动，子链 v1 零复制复用父快照与 manifest，并落 fork 关系。
+#[tokio::test]
+async fn g096_table_asset_fork_reuses_parent_snapshot() {
+    let env = create_test_env().await;
+    let csv = write_csv(&env.dir);
+    for round in 0..2 {
+        fs::write(
+            &csv,
+            format!("id,sku,qty\n1,a,{round}\n2,b,{round}\n3,c,{round}\n"),
+        )
+        .expect("rewrite csv");
+        let req = promote_req("fork_table_parent", &csv, PromoteKind::DataFile);
+        env.store
+            .promote_file_as_table_asset(&req, true)
+            .await
+            .expect("promote");
+    }
+
+    let fork = env
+        .store
+        .fork_global_table_asset("fork_table_parent", 2, "fork_table_child")
+        .await
+        .expect("fork table asset");
+    assert_eq!(fork.name, "fork_table_child");
+    assert_eq!(fork.version, 1);
+
+    let (child_table, child_snapshot, child_manifest) = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT ar.analytics_table, tav.snapshot_id, tav.manifest_id \
+                 FROM analytics_resources ar \
+                 JOIN table_asset_versions tav ON tav.asset_id = ar.id \
+                 WHERE ar.name = 'fork_table_child' AND ar.scope = 'global'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .map_err(sqlite_err("read_fork_child"))
+        })
+        .expect("child row");
+    let (parent_table, parent_snapshot, parent_manifest) = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT ar.analytics_table, tav.snapshot_id, tav.manifest_id \
+                 FROM analytics_resources ar \
+                 JOIN table_asset_versions tav ON tav.asset_id = ar.id \
+                 WHERE ar.name = 'fork_table_parent' AND ar.scope = 'global' \
+                   AND tav.version = 2",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .map_err(sqlite_err("read_fork_parent"))
+        })
+        .expect("parent row");
+    assert_eq!(child_table, parent_table, "v1 直接复用父快照，不复制数据");
+    assert_eq!(child_snapshot, parent_snapshot);
+    assert_eq!(child_manifest, parent_manifest);
+
+    let (parent_name, parent_version, child_name, child_version): (String, i32, String, i32) = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT p.name, taf.parent_version, c.name, taf.child_version \
+                 FROM table_asset_forks taf \
+                 JOIN analytics_resources p ON p.id = taf.parent_asset_id \
+                 JOIN analytics_resources c ON c.id = taf.child_asset_id \
+                 WHERE taf.child_asset_id = (SELECT id FROM analytics_resources \
+                    WHERE name = 'fork_table_child' AND scope = 'global')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(sqlite_err("read_table_fork"))
+        })
+        .expect("fork row");
+    assert_eq!(parent_name, "fork_table_parent");
+    assert_eq!(parent_version, 2);
+    assert_eq!(child_name, "fork_table_child");
+    assert_eq!(child_version, 1);
+
+    // 父 head 未被分叉挪动。
+    assert_eq!(
+        read_global_table(&env, "fork_table_parent").as_deref(),
+        Some(parent_table.as_str())
+    );
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g093_fork_reuses_manifest_without_moving_head() {
+    let env = create_test_env().await;
+    let (source, manifest_id) = seed_project_manifest(&env, "global/fork.csv", b"k,v\n1,a\n").await;
+    let parent = env
+        .store
+        .publish_file(&publish_req(
+            "fork_parent",
+            &env,
+            source,
+            manifest_id,
+            "global/fork.csv",
+            None,
+        ))
+        .await
+        .expect("publish parent");
+
+    let fork = env
+        .store
+        .fork_file("fork_parent", 1, "fork_child")
+        .await
+        .expect("fork");
+    assert_eq!(fork.child_version, 1);
+    let row = read_global_row(&env, "fork_child", None);
+    assert_eq!(row.0, "file");
+    assert!(row.1.is_none());
+    assert!(
+        env.dir
+        .join("global/resources/global/fork_child.csv")
+            .is_file()
+    );
+
+    // 原 head 不变，fork 关系落库。
+    let parent_row = read_global_row(&env, "fork_parent", None);
+    assert_eq!(parent_row.2, parent.content_hash);
+    let (parent_name, child_name): (String, String) = env
+        .store
+        .with_sqlite(|conn| {
+            conn.query_row(
+                "SELECT parent_name, child_name FROM asset_forks WHERE fork_id = ?1",
+                rusqlite::params![fork.fork_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sqlite_err("read_asset_fork"))
+        })
+        .expect("asset fork row");
+    assert_eq!(parent_name, "fork_parent");
+    assert_eq!(child_name, "fork_child");
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g094_distribute_file_first_materializes_project_file() {
+    let env = create_test_env().await;
+    let (source, manifest_id) = seed_project_manifest(&env, "global/dist.csv", b"x,y\n1,2\n").await;
+    env.store
+        .publish_file(&publish_req(
+            "dist_file",
+            &env,
+            source,
+            manifest_id,
+            "global/dist.csv",
+            None,
+        ))
+        .await
+        .expect("publish");
+    // 模拟发布后项目侧工作副本已移走（真实流程里归档会消费草稿）；再分发回来不应冲突。
+    fs::remove_file(env.project_root.join("resources/global/dist.csv"))
+        .expect("remove published source");
+    let project = ProjectDuckConn(env.project_duckdb.clone(), env.project_pool.clone());
+    let out = env
+        .store
+        .distribute(&project, &env.project_root, "dist_file", None)
+        .await
+        .expect("distribute file");
+    assert_eq!(out.shape, DistributeShape::File);
+    assert!(env.project_root.join("resources/global/dist.csv").is_file());
+    let (kind, table, origin_kind): (String, Option<String>, Option<String>) = {
+        let conn = env.project_pool.acquire().await.expect("project conn");
+        let inner = conn.inner().expect("inner");
+        inner
+            .query_row(
+                "SELECT kind, analytics_table, origin_kind FROM analytics_resources \
+                 WHERE id = ?1",
+                rusqlite::params![out.resource_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read project file row")
+    };
+    assert_eq!(kind, "file");
+    assert!(table.is_none(), "文件分发不能落 analytics_table");
+    assert_eq!(origin_kind.as_deref(), Some("global"));
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
+#[tokio::test]
+async fn g095_restore_file_version_from_manifest_creates_new_head() {
+    let env = create_test_env().await;
+    let (source, manifest_id) =
+        seed_project_manifest(&env, "global/restore.csv", b"k,v\n1,old\n").await;
+    let v1 = env
+        .store
+        .publish_file(&publish_req(
+            "restore_file",
+            &env,
+            source,
+            manifest_id,
+            "global/restore.csv",
+            None,
+        ))
+        .await
+        .expect("publish v1");
+    let (source2, manifest2) =
+        seed_project_manifest(&env, "global/restore-v2.csv", b"k,v\n1,new\n").await;
+    let v2 = env
+        .store
+        .publish_file(&publish_req(
+            "restore_file",
+            &env,
+            source2,
+            manifest2,
+            "global/restore.csv",
+            Some(v1.version),
+        ))
+        .await
+        .expect("publish v2");
+    assert_eq!(v2.version, 2);
+    assert_ne!(v1.content_hash, v2.content_hash);
+
+    let restored = env
+        .store
+        .restore_global_file_version("restore_file", v1.version)
+        .await
+        .expect("restore v1");
+    assert_eq!(restored.version, 3, "恢复 = 新版，不原地回滚");
+    let row = read_global_row(&env, "restore_file", None);
+    assert_eq!(row.2, v1.content_hash, "当前内容回到 v1");
+    assert_eq!(
+        fs::read(env.dir.join("global/resources/global/restore.csv")).expect("current"),
+        b"k,v\n1,old\n"
+    );
+
+    let versions = env
+        .store
+        .with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT version FROM analytics_resources WHERE name = 'restore_file' \
+                     AND scope = 'global' ORDER BY version",
+                )
+                .map_err(sqlite_err("read_restore_versions"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, i32>(0))
+                .map_err(sqlite_err("query_restore_versions"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("collect_restore_versions"))?;
+            Ok(rows)
+        })
+        .expect("versions");
+    assert_eq!(versions, vec![1, 2, 3], "恢复只追加，不删旧版本");
 
     let _ = fs::remove_dir_all(&env.dir);
 }

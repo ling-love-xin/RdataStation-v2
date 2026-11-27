@@ -149,6 +149,17 @@ impl ScratchpadHost for WorkbenchScratchpadHost {
         let host = crate::components::resource_host::build_host(&self.shared);
         host.request_archive_drafts(paths, window, cx);
     }
+
+    /// 有项目才有资产库回收站可看（回收站落在 `{项目}/.RSmeta/trash`）。
+    fn can_open_asset_trash(&self) -> bool {
+        self.shared.project_root().is_some()
+    }
+
+    /// 草稿箱栏 → 资产库回收站：与资产库面板原来的「回收站…」同一个对话框。
+    fn open_asset_trash(&self, window: &mut Window, cx: &mut App) {
+        let host = crate::components::resource_host::build_host(&self.shared);
+        host.request_open_trash(window, cx);
+    }
 }
 
 /// 构造宿主端口（装配期调用；生产入口 `SidebarPanel::new`）。

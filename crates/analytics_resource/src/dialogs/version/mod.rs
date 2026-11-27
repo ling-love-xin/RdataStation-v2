@@ -1,8 +1,8 @@
 //! 版本历史对话框（原型 §4.3）。
 //!
 //! 版本**只追加**（原型 §11 决策 9）：还原 = 用旧内容生成新版本，不覆盖历史、不做行级
-//! diff（文本 diff 归编辑器）。这个对话框回答三件事：还有哪些版本、哪一版的内容副本
-//! 已经不在了、把选中的那一版拿去干嘛。
+//! diff（文本 diff 归编辑器）。这个对话框回答三件事：还有哪些版本、哪一版的内容已经不在、
+//! 把选中的那一版拿去干嘛；Shift+点一行可设对比基准，支持任意两版对比。
 //!
 //! 分工与另三个对话框一致：**行数据与动作执行都在宿主**（本文件不碰文件系统、不认识
 //! `ArchiveService`），这里只做选中与确认。行数据可以被宿主在动作完成后**替换**
@@ -22,7 +22,7 @@ pub(crate) use gpui_kit::*;
 
 pub(crate) use crate::ui;
 
-/// 列表最多列多少条：版本行**永久保留**（保留策略只裁内容副本，不删版本行），
+/// 列表最多列多少条：版本行**永久保留**（文件内容进 CAS，全局表按保留策略裁表），
 /// 一个频繁再归档的存档累积上百行是正常的——再多只列最新的一批并**明说**，
 /// 不静默截断，也不为这个对话框手搓虚拟化（行数真成问题时再上 `List`）。
 pub const MAX_VERSION_ROWS: usize = 50;
@@ -51,11 +51,15 @@ pub enum VersionAction {
     Restore { version: i32 },
     /// 取回该版本为草稿（复制一份可写工作副本，本体不动）。
     CheckoutDraft { version: i32 },
-    /// 删除该版本的内容副本（**保留版本行**；删了不可恢复，所以要确认）。
-    DeleteCopy { version: i32 },
-    /// 与当前版本对比（只读查看，不入动作回执、不写库；文本 diff 查看器 `version_diff`）。
-    Diff { version: i32 },
-    /// 用这一版的内容做一次分析（只读查看：把该版本副本挂成分析视图，本体与版本都不动）。
+    /// 与另一版对比（只读查看，不入动作回执、不写库；文本 diff 查看器 `version_diff`）。
+    ///
+    /// `against=None` = 与当前版本比；`Some(v)` = 与 Shift+点选的基准版本比。两版由后端按
+    /// 版本号排成旧→新，点选顺序不影响 diff 方向。
+    Diff {
+        version: i32,
+        against: Option<i32>,
+    },
+    /// 用这一版的内容做一次分析（只读查看：把该版本内容挂成分析视图，本体与版本都不动）。
     ///
     /// 铁律 D17：历史版本不进数据对象清单平铺，要看旧数据就走这个二级入口。
     /// 表型资产没有内容副本，不存在这个动作。
@@ -70,8 +74,7 @@ impl VersionAction {
         match self {
             Self::Restore { version }
             | Self::CheckoutDraft { version }
-            | Self::DeleteCopy { version }
-            | Self::Diff { version }
+            | Self::Diff { version, .. }
             | Self::Analyze { version } => version,
             Self::Solidify { version } => version,
         }
@@ -83,10 +86,14 @@ impl VersionAction {
 pub struct VersionDialogState {
     rows: Rc<RefCell<Vec<VersionRow>>>,
     selected: Rc<RefCell<Option<i32>>>,
+    /// 对比基准（Shift+点选的那一行）：用于任意两版对比；`None` = 与当前版本比。
+    diff_base: Rc<RefCell<Option<i32>>>,
     /// 动作进行中：按钮一律置灰（避免连点两次还原，那会连着生成两个版本）。
     busy: Rc<Cell<bool>>,
     /// 项目只读：三个动作全部置灰（判定与面板 / 详情同一口径：由宿主机注入）。
     read_only: Rc<Cell<bool>>,
+    /// 全局实例行：本地没有副本，动作栏额外抑制「用 vN 分析」（它按项目表名路由）。
+    global_scope: Rc<Cell<bool>>,
     /// 动作期间的提示（"正在还原 v1…"）；`None` = 不显示。
     note: Rc<RefCell<Option<String>>>,
 }
@@ -102,8 +109,10 @@ impl VersionDialogState {
         Self {
             rows: Rc::new(RefCell::new(Vec::new())),
             selected: Rc::new(RefCell::new(None)),
+            diff_base: Rc::new(RefCell::new(None)),
             busy: Rc::new(Cell::new(false)),
             read_only: Rc::new(Cell::new(false)),
+            global_scope: Rc::new(Cell::new(false)),
             note: Rc::new(RefCell::new(None)),
         }
     }
@@ -118,6 +127,13 @@ impl VersionDialogState {
         if let Some(selected) = selected {
             if !rows.iter().any(|row| row.version == selected) {
                 *self.selected.borrow_mut() = None;
+            }
+        }
+        // 基准行不在新列表里就清掉：否则动作栏会拿一个不存在的版本去对比。
+        let diff_base = *self.diff_base.borrow();
+        if let Some(base) = diff_base {
+            if !rows.iter().any(|row| row.version == base) {
+                *self.diff_base.borrow_mut() = None;
             }
         }
         *self.rows.borrow_mut() = rows;
@@ -145,6 +161,31 @@ impl VersionDialogState {
             .cloned()
     }
 
+    /// 对比基准版本（`None` = 与当前版本比）。
+    pub fn diff_base(&self) -> Option<i32> {
+        *self.diff_base.borrow()
+    }
+
+    /// 对比基准那一行（动作栏据此判断基准是否有可读内容）。
+    pub fn diff_base_row(&self) -> Option<VersionRow> {
+        let base = self.diff_base()?;
+        self.rows
+            .borrow()
+            .iter()
+            .find(|row| row.version == base)
+            .cloned()
+    }
+
+    /// Shift+点一行：设为基准；再 Shift+点同一行：取消。
+    pub fn toggle_diff_base(&self, version: i32) {
+        let mut base = self.diff_base.borrow_mut();
+        *base = if *base == Some(version) {
+            None
+        } else {
+            Some(version)
+        };
+    }
+
     pub fn set_busy(&self, busy: bool) {
         self.busy.set(busy);
     }
@@ -160,6 +201,15 @@ impl VersionDialogState {
 
     pub fn read_only(&self) -> bool {
         self.read_only.get()
+    }
+
+    /// 打开前由宿主告知这是全局实例行（动作栏只保留对比，不摆项目侧动作）。
+    pub fn set_global_scope(&self, global_scope: bool) {
+        self.global_scope.set(global_scope);
+    }
+
+    pub fn global_scope(&self) -> bool {
+        self.global_scope.get()
     }
 
     pub fn set_note(&self, note: Option<String>) {

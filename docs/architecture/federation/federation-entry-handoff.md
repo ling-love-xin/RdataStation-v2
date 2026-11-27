@@ -241,10 +241,11 @@ workbench 里没有任何字段长期持有 project manager。所以：
 要么交给洞察取样（临时、随 TTL 走），要么搬进项目分析库（持久）。抽成一处是为了让「空结果 /
 无行 / 物化失败」三条失败口径只有一份。
 
-**搬运原语**：`write_table_across_connections(source, dest, source_table, target_table, Create)`
-（源 `COPY … TO parquet` → 目标 `CREATE TABLE … AS SELECT * FROM read_parquet`）。
-不用 ATTACH 的理由见 §8.6 实测；用 Parquet 而非 CSV 是为了 DECIMAL / 日期 / 带引号文本原样过一遍
-（`tmp_q_probe` 的 `DECIMAL(10,4)` 落库后类型仍是 DECIMAL，已断言）。
+**搬运原语（2026-11-26 已更新）**：原 `write_table_across_connections`
+（`COPY … TO parquet` → `read_parquet`）已在所有权收口后删除，改为同根 CTAS
+`write_shared_temp_to_project`（`CREATE TABLE analytics.<目标> AS SELECT * FROM rds_tmp.<源>`）。
+项目库与全局库现在共用一条根连接的两个 ATTACH 别名，不再需要跨连接中转，也不再落临时文件；
+详见 `docs/architecture/analytics_resource/duckdb-ownership-m6-slimming.md` §3。
 
 **锁顺序（写死一处）**：先锁内存单例（源），再锁项目写连接（目标）。反过来的实现若在别处
 出现，就会与这里凑成死锁；`persist_jobs` 注释里写明了「只此一处同时持两把锁」。

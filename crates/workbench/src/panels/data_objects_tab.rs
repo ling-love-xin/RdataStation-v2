@@ -1739,7 +1739,7 @@ impl DataObjectsTab {
                     // `context_menu` 会换掉元素类型（不再有样式方法），所以必须挂在链尾。
                     .context_menu({
                         use crate::components::file_actions::{
-                            archive_file_as_snapshot, bare_table_name,
+                            archive_file_as_snapshot, table_ref_name,
                         };
                         let shared = self.shared.clone();
                         let sql_ref = object.sql_ref.clone();
@@ -1798,7 +1798,7 @@ impl DataObjectsTab {
                         move |menu, _window, _cx| {
                             let mut menu = menu;
                             if let Some(reference) = sql_ref.clone().filter(|_| usable) {
-                                let table = bare_table_name(&reference);
+                                let table = table_ref_name(&reference);
                                 let open = shared.clone();
                                 let open_ref = reference.clone();
                                 menu = menu.item(
@@ -1869,13 +1869,13 @@ impl DataObjectsTab {
                                     },
                                 ));
                             }
-                            // 未登记段的表：就地补身份（只写登记，不搬数据、不涨版本）
+                            // 未归档段的普通表：显式归档成冻结快照并消费源表
                             if let Some(table) = register_target.clone() {
                                 let register = shared.clone();
                                 let register_label = label.clone();
-                                menu = menu.item(PopupMenuItem::new(tr("登记为资产")).on_click(
+                                menu = menu.item(PopupMenuItem::new(tr("归档为表资产")).on_click(
                                     move |_, _, cx| {
-                                        crate::components::result_set_actions::register_table_asset(
+                                        crate::components::result_set_actions::archive_table_asset(
                                             &register,
                                             &table,
                                             &register_label,

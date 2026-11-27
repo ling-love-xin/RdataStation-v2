@@ -41,9 +41,42 @@ pub struct ForeignTrash {
     pub count: usize,
 }
 
+/// 回收站归属：项目级 `.RSmeta/trash` 与全局 `data/trash/global` 共用同一套对话框。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrashScope {
+    #[default]
+    Project,
+    Global,
+}
+
+impl TrashScope {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Project => "回收站",
+            Self::Global => "全局回收站",
+        }
+    }
+
+    pub fn empty_text(self) -> &'static str {
+        match self {
+            Self::Project => "回收站是空的",
+            Self::Global => "全局回收站是空的",
+        }
+    }
+
+    pub fn empty_confirm_title(self) -> &'static str {
+        match self {
+            Self::Project => "清空回收站？",
+            Self::Global => "清空全局回收站？",
+        }
+    }
+}
+
 /// 打开对话框所需的全部信息（宿主在取数线程上备好）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrashDialogSeed {
+    /// 条目来自哪个回收站（决定标题 / 空态 / 清空确认文案）。
+    pub scope: TrashScope,
     /// 只含本模块（`origin = "resources"`）的条目，按删除时间倒序。
     pub rows: Vec<TrashRow>,
     /// 其他模块的条目统计（可能为空）。

@@ -34,13 +34,17 @@ pub(crate) use gpui_kit::{App, AppContext as _, Window};
 
 pub(crate) use crate::detail_view::ArchiveDetail;
 pub(crate) use crate::dialogs::archive::{ArchiveConflict, ArchiveDialogSeed, open_archive_dialog};
-pub(crate) use crate::dialogs::checkout::{CheckoutDialogSeed, open_checkout_dialog, suggest_work_copy_name};
+pub(crate) use crate::dialogs::checkout::{
+    CheckoutDialogSeed, open_checkout_dialog, suggest_work_copy_name,
+};
 pub(crate) use crate::dialogs::group::{GroupNameEvent, GroupNameKind, open_group_name_dialog};
 pub(crate) use crate::dialogs::pick::{
     DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog,
     open_draft_pick_dialog_with,
 };
-pub(crate) use crate::dialogs::rename::{RenameField, RenameSeed, open_rename_dialog, rename_placeholder};
+pub(crate) use crate::dialogs::rename::{
+    RenameField, RenameSeed, open_rename_dialog, rename_placeholder,
+};
 pub(crate) use crate::filter::{SortField, SortOrder};
 pub(crate) use crate::model::{
     ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, DeleteTarget,
@@ -52,8 +56,8 @@ pub(crate) use crate::resource_view::{GroupOption, ResourcesHost};
 pub(crate) use crate::jobs as resource_jobs;
 
 // 草稿箱在本项目里的目录名 / 来源标记：只是字符串约定，不为此反向依赖 scratchpad crate。
-// 值须与 `scratchpad::MODULE_DIR_NAME` / `ORIGIN_SCRATCHPAD` 保持一致（2026-11-12 分层收口）。
-pub(crate) const SCRATCHPAD_DIR: &str = "scratchpad";
+// 目录名以 payload 的路径常量为准；来源标记须与 `scratchpad::ORIGIN_SCRATCHPAD` 一致。
+pub(crate) const SCRATCHPAD_DIR: &str = crate::payload::SCRATCHPAD_DIR_NAME;
 pub(crate) const ORIGIN_SCRATCHPAD: &str = "scratchpad";
 
 /// 资产库宿主的 workbench 能力面（P2-b 下沉引入，与 `ResourcesHost` 方向相反）：
@@ -118,6 +122,13 @@ pub trait ResourceHostBackend: 'static {
     fn snapshot_details(&self, _cx: &App) -> Vec<ArchiveDetail> {
         Vec::new()
     }
+
+    /// 全局系统目录（`data/system`）：全局文件本体在它下面的 `resources/`。
+    ///
+    /// 默认 `None`：测试替身 / 未初始化全局库的场景没有全局文件可打开。
+    fn global_system_dir(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// 状态栏提示（自由函数版：对话框回调里没有 `self`）。
@@ -180,7 +191,6 @@ fn is_structured_payload(path: &std::path::Path) -> bool {
 /// 提交一次归档（入队 + 立刻刷新 + 回执）：两条归档入口共用，
 /// 避免"一处记得刷新、另一处忘了"。
 ///
-/// 保留策略在这里（主线程）读好随作业带入：工作线程上拿不到 GPUI 的 global 设置。
 fn submit_archive(
     root: &Path,
     read_only: bool,
@@ -189,14 +199,12 @@ fn submit_archive(
     backend: &Rc<dyn ResourceHostBackend>,
     cx: &mut App,
 ) {
-    let keep_versions = backend.keep_versions(cx);
     // 探测标志跟着**来源**走：结构化数据文件才值得连一次 DuckDB（其余文件的指纹是字节 sha256）。
     let analysis_probe = request.analysis.is_none() && is_structured_payload(&request.source_path);
     resource_jobs::enqueue_archive(
         root.to_path_buf(),
         read_only,
         request,
-        keep_versions,
         analysis_probe,
         assertion,
     );
@@ -209,7 +217,6 @@ struct ResourceHost {
     backend: Rc<dyn ResourceHostBackend>,
 }
 
-
 pub mod archive_actions;
 pub mod delete_actions;
 pub mod detail_actions;
@@ -221,12 +228,7 @@ impl ResourcesHost for ResourceHost {
     fn request_archive_from_drafts(&self, window: &mut Window, cx: &mut App) {
         archive_actions::request_archive_from_drafts(self, window, cx);
     }
-    fn request_archive_drafts(
-        &self,
-        paths: Vec<PathBuf>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn request_archive_drafts(&self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut App) {
         archive_actions::request_archive_drafts(self, paths, window, cx);
     }
     fn request_archive_from_file(&self, window: &mut Window, cx: &mut App) {
@@ -279,21 +281,20 @@ impl ResourcesHost for ResourceHost {
         );
     }
 
-    /// 从全局实例删除（刀 B）：确认后入队，只清全局那一份，已分发副本不动。
-    fn request_delete_global(
-        &self,
-        detail: &ArchiveDetail,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    /// 移入全局回收站（刀 B）：确认后入队，只软删全局当前登记，已分发副本不动。
+    fn request_delete_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {
         detail_actions::request_delete_global(self, detail, window, cx);
     }
-    fn request_show_origin_chain(
+    fn request_restore_global_previous(
         &self,
         detail: &ArchiveDetail,
+        from: Option<i32>,
         window: &mut Window,
         cx: &mut App,
     ) {
+        detail_actions::request_restore_global_previous(self, detail, from, window, cx);
+    }
+    fn request_show_origin_chain(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {
         detail_actions::request_show_origin_chain(self, detail, window, cx);
     }
     fn is_reference_stale(&self, resource_id: &str) -> bool {
@@ -393,53 +394,4 @@ impl ResourcesHost for ResourceHost {
 /// 本文件的 [`ResourceHost`] 实现 [`ResourcesHost`] 面板回调，动作经 backend 落回宿主。
 pub fn new_host(backend: Rc<dyn ResourceHostBackend>) -> Rc<dyn ResourcesHost> {
     Rc::new(ResourceHost { backend })
-}
-
-/// 扩展名白名单判定（与 `analytics_resource::global::file_read_expr` 同口径）：
-/// 数据文件升级 = 映射出全局表；文本脚本 = 内容表（方案 A）；两者之外不能升级。
-fn is_data_file_ext(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_ascii_lowercase())
-            .as_deref(),
-        Some("csv" | "tsv" | "txt" | "parquet" | "xlsx" | "xls" | "json" | "ndjson")
-    )
-}
-
-/// 文本脚本白名单：内容是纯文本，可以读成「脚本内容表」进全局库。
-///
-/// 数据文件与文本脚本都是**正向白名单**——不在两张表里的（png / jpg / zip / docx
-/// 这类二进制，或没有扩展名）不允许升级，升级入口先回执说明，而不是让
-/// `global::promote::Script` 分支的 `fs::read_to_string` 撞 UTF-8 失败。
-fn is_text_script_ext(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_ascii_lowercase())
-            .as_deref(),
-        Some("sql" | "py" | "r" | "md" | "yaml" | "yml" | "toml" | "js" | "ts" | "sh" | "ps1" | "ipynb")
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{is_data_file_ext, is_text_script_ext};
-    use std::path::Path;
-
-    #[test]
-    fn upgrade_shapes_are_positive_whitelists() {
-        // 数据文件 → 映射出表（与 `file_read_expr` 同一张白名单，大小写不敏感）。
-        assert!(is_data_file_ext(Path::new("dau.CSV")));
-        assert!(is_data_file_ext(Path::new("dau.parquet")));
-        // 文本脚本 → 内容表。
-        assert!(is_text_script_ext(Path::new("dau.sql")));
-        assert!(is_text_script_ext(Path::new("README.md")));
-        // 二进制与无扩展名：两张白名单都不收（升级入口据此回执，不交给 read_to_string 撞 UTF-8）。
-        assert!(!is_data_file_ext(Path::new("chart.png")));
-        assert!(!is_text_script_ext(Path::new("chart.png")));
-        assert!(!is_data_file_ext(Path::new("bundle.zip")));
-        assert!(!is_text_script_ext(Path::new("bundle.zip")));
-        assert!(!is_text_script_ext(Path::new("doc")));
-    }
 }

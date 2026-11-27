@@ -36,6 +36,7 @@ pub fn open_trash_dialog_with(
     }
     let on_action: Rc<dyn Fn(TrashAction, &mut Window, &mut App)> = Rc::new(on_action);
     let on_close: Rc<dyn Fn(&mut App)> = Rc::new(on_close);
+    let scope = seed.scope;
 
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
@@ -60,7 +61,19 @@ pub fn open_trash_dialog_with(
                         .text_xs()
                         .text_ellipsis()
                         .text_color(theme.colors.muted_foreground)
-                        .child(format!("共 {} 项", rows.len())),
+                        .child({
+                            let global_count = rows.iter().filter(|row| row.is_global).count();
+                            if global_count == 0 {
+                                format!("共 {} 项", rows.len())
+                            } else {
+                                format!(
+                                    "共 {} 项（项目 {} · 全局 {}）",
+                                    rows.len(),
+                                    rows.len() - global_count,
+                                    global_count
+                                )
+                            }
+                        }),
                 )
                 .when_some(note, |bar, note| {
                     bar.child(
@@ -80,7 +93,7 @@ pub fn open_trash_dialog_with(
                     .py_2()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child(tr("回收站是空的")),
+                    .child(tr(scope.empty_text())),
             );
         } else {
             let mut list = div().v_flex().w_full();
@@ -141,11 +154,18 @@ pub fn open_trash_dialog_with(
                     let on_action = on_action.clone();
                     alert
                         .confirm()
-                        .title(tr("清空资产库的回收站？"))
-                        .description(format!(
-                            "将彻底删除资产库的 {count} 项（本体不再保留，不可恢复）；\
-                             其他模块共用的条目不会被删。"
-                        ))
+                        .title(tr(scope.empty_confirm_title()))
+                        .description(if scope == TrashScope::Global {
+                            format!(
+                                "将彻底删除全局回收站里的 {count} 项（全局表与文件历史副本不再保留，不可恢复）；\
+                                 仍被项目引用（pin）的条目会跳过。"
+                            )
+                        } else {
+                            format!(
+                                "将彻底删除项目与全局回收站里的 {count} 项（项目本体、全局表与文件历史副本都不再保留，不可恢复）；\
+                                 仍被项目引用（pin）的全局条目会跳过。"
+                            )
+                        })
                         .button_props(
                             DialogButtonProps::default()
                                 .ok_text("清空")
@@ -164,7 +184,7 @@ pub fn open_trash_dialog_with(
         };
 
         dialog
-            .title(tr("回收站"))
+            .title(tr(scope.title()))
             .w(cx.theme().font_size * ui::TRASH_DIALOG_WIDTH)
             .child(body)
             .footer(

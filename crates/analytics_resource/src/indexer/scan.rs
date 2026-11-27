@@ -17,15 +17,20 @@ impl<'a> IndexRepair<'a> {
             };
             tracked.insert(rel_path);
 
-            // 带结构指纹的行本体也在 `resources/` 里，但它的 `content_hash` 是**结构指纹**
-            // （定义 + 列结构，行数不进——见 `analysis.rs` 的裁决）：拿字节 sha256 去比
-            // 只会把**每一行都报成“内容已变”**，把「修复…」入口变成噪声。
-            // 结构探测（DuckDB `DESCRIBE`）属 P4.1 的第二半，接上之前这里
-            // **宁可少报、不可误报**：这类行不参与文件级指纹比对（仍参与本体存在性检查）。
+            // 带结构指纹的**旧行**本体也在 `resources/` 里，但它的 `content_hash` 是结构指纹
+            // （定义 + 列结构，行数不进）：拿字节 sha256 去比只会整片误报。
+            // 2026-11-27 起新归档的文件资产（有 `file_asset_versions` 行）`content_hash` 一律
+            // 是字节 sha256，即使带 `definition_sql` 也要参与字节比对；只有无 manifest 的旧
+            // 结构化行继续跳过。
             //
             // 判据是**指纹种类**而不是种类值：2026-11-16 起 `analysis` 并入 `File`，
             // 按 kind 判会把数据文件全放进字节比对，从而整片误报。
-            if row.definition_sql.is_some() {
+            let has_file_manifest = self
+                .store
+                .file_asset_version(&row.id, row.version)
+                .await?
+                .is_some();
+            if row.definition_sql.is_some() && !has_file_manifest {
                 continue;
             }
             // reference 模式的本体在**源位置**（`source_path`，可能在项目外），不在

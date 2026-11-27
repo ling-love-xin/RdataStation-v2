@@ -28,7 +28,7 @@ fn probe_analysis_facts(path: &std::path::Path) -> Result<AnalysisFacts, String>
 }
 
 pub(crate) async fn run_archive(job: &ArchiveJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), Some(job.keep_versions)).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -98,6 +98,33 @@ async fn run_archive_with_service(job: &ArchiveJob, service: &ArchiveService) ->
         }
     }
 
+    // 全局取回过来的草稿：出处要记成 `global:<name>`（另存项目后来源链才连得上），
+    // 同时先把 dest_rel 留住——绑定里的出处马上会被改写，之后结租约还要用它。
+    let checkout_dest_rel = request
+        .binding
+        .promoted_from
+        .as_deref()
+        .and_then(|path| path.strip_prefix("scratchpad/"))
+        .map(str::to_string);
+    let mut checkout_global_name = None;
+    if request.existing_resource_id.is_none()
+        && let Some(dest_rel) = checkout_dest_rel.as_deref()
+    {
+        match service.store().lease_by_dest(dest_rel).await {
+            Ok(Some(lease)) if lease.base_scope == "global" => {
+                if let Some(name) = lease.resource_id.strip_prefix(crate::GLOBAL_PREFIX) {
+                    request.binding.promoted_from =
+                        Some(format!("{}{name}", crate::GLOBAL_PREFIX));
+                    checkout_global_name = Some(name.to_string());
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "归档前反查全局取回租约失败，出处按草稿记录")
+            }
+        }
+    }
+
     match service.archive(request.clone()).await {
         Ok(outcome) => {
             // 业务断言是附属项：写失败不撤销已成功的归档（本体与登记都已成立），
@@ -126,6 +153,49 @@ async fn run_archive_with_service(job: &ArchiveJob, service: &ArchiveService) ->
                         Err(error) => {
                             tracing::warn!(error = %error, "取回凭据结案失败（归档已成功）")
                         }
+                    }
+                }
+            }
+            // 全局文件取回后归档：草稿已经变成项目资产，按 dest 反查 `base_scope=global`
+            // 的项目租约，把项目侧与全局侧一起结清；否则这笔取回会永久占住 active。
+            if let Some(dest_rel) = checkout_dest_rel.as_deref() {
+                match service.store().lease_by_dest(dest_rel).await {
+                    Ok(Some(lease)) if lease.base_scope == "global" => {
+                        match service.store().consume_lease(&lease.lease_id, outcome.version).await {
+                            Ok(()) => {
+                                let name = checkout_global_name.as_deref();
+                                if let Some(name) = name {
+                                    match crate::global::GlobalInstanceStore::production().await {
+                                        Ok(gstore) => {
+                                            if let Err(error) = gstore
+                                                .consume_checkout_lease(
+                                                    name,
+                                                    &job.project_root,
+                                                    outcome.version,
+                                                )
+                                                .await
+                                            {
+                                                tracing::warn!(error = %error, name, "全局取回租约结案失败");
+                                            } else {
+                                                notes.push(format!(
+                                                    "已结清全局取回「{name}」的租约"
+                                                ));
+                                            }
+                                        }
+                                        Err(reason) => {
+                                            tracing::warn!(reason = %reason, name, "打开全局库结案取回租约失败")
+                                        }
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(error = %error, lease_id = %lease.lease_id, "项目取回租约结案失败（归档已成功）")
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(error = %error, "按草稿路径反查取回租约失败（归档已成功）")
                     }
                 }
             }
@@ -160,7 +230,7 @@ async fn run_archive_with_service(job: &ArchiveJob, service: &ArchiveService) ->
 /// 落点在动文件**之前**定死（重名避让），回执里给的就是真实路径：用户看到"取回为 X"
 /// 之后去草稿箱找 X，必须找得到。
 pub(crate) async fn run_checkout(job: &CheckoutJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), None).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -190,6 +260,23 @@ async fn run_checkout_with_service(job: &CheckoutJob, service: &ArchiveService) 
             {
                 tracing::error!(error = %error, "取回凭据写入失败：改完再归档将无法升版");
             }
+            // 文件元数据随 manifest 取回：落到草稿箱的集中 sidecar，供编辑器恢复书签/连接/视图。
+            if let Some(meta) = &outcome.file_meta {
+                if let Some(sidecar) =
+                    scratchpad_sidecar_path(&job.project_root, &outcome.dest_path)
+                {
+                    let meta = meta.clone();
+                    if let Err(error) = tokio::task::spawn_blocking(move || {
+                        file_meta::write_meta_at(&sidecar, &meta)
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result.map_err(|error| error.to_string()))
+                    {
+                        tracing::warn!(error = %error, "取回后写草稿元数据失败（文件本体已取回）");
+                    }
+                }
+            }
             OpOutcome::CheckedOut {
                 dest: outcome.dest_path,
                 version: outcome.version,
@@ -205,7 +292,7 @@ async fn run_checkout_with_service(job: &CheckoutJob, service: &ArchiveService) 
 
 /// 执行一次撤销归档。
 pub(crate) async fn run_undo(job: &UndoJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), None).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -230,7 +317,7 @@ pub(crate) async fn run_undo(job: &UndoJob) -> OpOutcome {
 /// 逐条走服务层；服务层不做预回滚（部分成功就部分成功），所以错误文案里会带“已移入 N 项”
 /// ——宿主只需原样转述，不要自己算进度。
 pub(crate) async fn run_trash(job: &TrashJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone(), None).await {
+    let service = match open_service(job.project_root.clone()).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -248,4 +335,25 @@ pub(crate) async fn run_trash(job: &TrashJob) -> OpOutcome {
             reason: error.to_string(),
         },
     }
+}
+
+/// 草稿箱集中 sidecar 路径（与 `scratchpad` 的目录约定一致）。
+fn scratchpad_sidecar_path(
+    project_root: &std::path::Path,
+    dest: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let relative = dest
+        .strip_prefix(project_root.join("scratchpad"))
+        .ok()?;
+    let mut out = project_root
+        .join(".RSmeta")
+        .join("scratchpad")
+        .join("meta");
+    if let Some(parent) = relative.parent() {
+        if !parent.as_os_str().is_empty() {
+            out = out.join(parent);
+        }
+    }
+    let name = relative.file_name()?.to_string_lossy();
+    Some(out.join(format!("{name}.meta.json")))
 }

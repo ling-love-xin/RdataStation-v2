@@ -7,7 +7,6 @@
 
 use std::path::PathBuf;
 
-use engine::services::duckdb_service::DuckDbService;
 use rds_workbench::services::persist_jobs::persist_result_table;
 
 fn temp_root(tag: &str) -> PathBuf {
@@ -31,12 +30,14 @@ fn temp_root(tag: &str) -> PathBuf {
 fn a_result_table_lands_in_the_project_analytics_db() {
     let root = temp_root("land");
 
-    // 源：内存单例里建一张带类型的表（等于 `tmp_q_` 的处境）
+    // 源在项目分析库的 `rds_tmp` schema（所有权收口后源与目标同一根连接）。
     {
-        let singleton = DuckDbService::get_or_create_duckdb().expect("内存单例");
-        let conn = singleton.lock().expect("单例锁");
+        std::fs::create_dir_all(root.join(".RSmeta")).expect("建 .RSmeta");
+        let db = engine::persistence::ProjectDatabaseManager::analysis_db_path(&root);
+        let conn = duckdb::Connection::open(&db).expect("项目分析库");
         conn.execute_batch(
-            "CREATE OR REPLACE TABLE tmp_q_probe AS \
+            "CREATE SCHEMA IF NOT EXISTS rds_tmp;
+             CREATE OR REPLACE TABLE rds_tmp.tmp_q_probe AS \
              SELECT CAST(12.3400 AS DECIMAL(10,4)) AS amount, DATE '2026-11-15' AS biz_date",
         )
         .expect("源表");
@@ -100,16 +101,16 @@ fn a_result_table_lands_in_the_project_analytics_db() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// 升级闭环（验收第 1 条）：表落进项目分析库**之后**，资产行也登记出来。
+/// 落表与资产分离（T8）：普通表落进项目分析库后**不会**自动登记资产；
+/// 只有显式归档才生成冻结快照，并消费源表。
 ///
-/// 钉住三件事：显示名不带 `res_` 前缀、`analytics_table` 非空（`resolve` 认得出是表型）、
-/// 版本从 1 起——这正是「临时表 / 结果集 → 升级成资产」缺了半个身子的那一段。
+/// 钉住三件事：落表后资产表为空、归档生成 v1 快照、源表被消费。
 #[test]
-fn an_upgrade_registers_a_table_kind_asset_row() {
+fn persisting_a_table_does_not_register_an_asset() {
     let root = temp_root("asset");
 
     // 项目元数据库（资产登记的归处）先按生产口径迁移到位：生产由应用启动做，
-    // 测试里必须显式做一次，否则只是个空 SQLite（登记会报 no such table）。
+    // 测试里必须显式做一次，否则只是个空 SQLite（归档会报 no such table）。
     engine::migration::MigrationManager::new()
         .migrate(
             &root.join(".RSmeta").join("project.db"),
@@ -118,37 +119,24 @@ fn an_upgrade_registers_a_table_kind_asset_row() {
         .expect("项目元数据库迁移");
 
     {
-        let singleton = DuckDbService::get_or_create_duckdb().expect("内存单例");
-        let conn = singleton.lock().expect("单例锁");
+        std::fs::create_dir_all(root.join(".RSmeta")).expect("建 .RSmeta");
+        let db = engine::persistence::ProjectDatabaseManager::analysis_db_path(&root);
+        let conn = duckdb::Connection::open(&db).expect("项目分析库");
         conn.execute_batch(
-            "CREATE OR REPLACE TABLE tmp_q_asset AS \
+            "CREATE SCHEMA IF NOT EXISTS rds_tmp;
+             CREATE OR REPLACE TABLE rds_tmp.tmp_q_asset AS \
              SELECT CAST(12.3400 AS DECIMAL(10,4)) AS amount, DATE '2026-11-15' AS biz_date",
         )
         .expect("源表");
     }
 
-    let (table, rows, columns) =
+    let (table, rows, _columns) =
         persist_result_table(&root, "tmp_q_asset", "结果 3").expect("落成项目持久表");
     assert_eq!(rows, 1);
 
-    // 登记也自建 runtime 并 block_on（同一个 `#[test]`，不是 async 上下文）
-    let runtime = tokio::runtime::Runtime::new().expect("登记用 runtime");
-    let asset = runtime
-        .block_on(analytics_resource::table_asset::register_at(
-            &root,
-            analytics_resource::table_asset::TableAssetRequest {
-                name: "结果 3".to_string(),
-                analytics_table: table.clone(),
-                row_count: Some(i32::try_from(rows).unwrap_or(i32::MAX)),
-                column_count: columns,
-            },
-        ))
-        .expect("登记成表型资产");
+    let runtime = tokio::runtime::Runtime::new().expect("归档用 runtime");
 
-    assert_eq!(asset.version, 1, "首次升级就是 v1");
-    assert_eq!(asset.name, "结果 3", "资产名不带 res_ 前缀");
-
-    // 读回来核对档位：`analytics_table` 列才是权威判据
+    // 落表不登记：资产表里一条都没有。
     let pool = std::sync::Arc::new(
         runtime
             .block_on(engine::persistence::ProjectSqlitePool::new(
@@ -158,6 +146,32 @@ fn an_upgrade_registers_a_table_kind_asset_row() {
             .expect("项目元数据库连接池"),
     );
     let store = analytics_resource::AnalyticsResourceStore::new(pool);
+    assert!(
+        runtime
+            .block_on(store.list_alive_resources())
+            .expect("清单")
+            .is_empty(),
+        "存为表只建普通表，不自动登记资产"
+    );
+
+    // 显式归档：生成 v1 快照并消费源表。
+    let asset = runtime
+        .block_on(analytics_resource::table_asset::archive_table_at(
+            &root,
+            &analytics_resource::table_asset::ArchiveTableRequest {
+                name: "结果 3".to_string(),
+                source_schema: "main".to_string(),
+                source_table: table.clone(),
+                asset_id: None,
+                consume_source: true,
+            },
+        ))
+        .expect("归档成表资产");
+
+    assert_eq!(asset.version, 1, "首次归档就是 v1");
+    assert!(asset.source_consumed, "显式归档要消费源表");
+
+    // 读回来核对档位：`analytics_table` 列才是权威判据
     let row = runtime
         .block_on(store.get_resource_by_id(&asset.resource_id))
         .expect("资产行读得回来");
@@ -166,7 +180,13 @@ fn an_upgrade_registers_a_table_kind_asset_row() {
         analytics_resource::ArchiveKind::AnalyticsTable,
         "表型资产（不是文件型）"
     );
-    assert_eq!(row.analytics_table.as_deref(), Some(table.as_str()));
+    assert!(
+        row.analytics_table
+            .as_deref()
+            .is_some_and(|name| name.starts_with("arc_")),
+        "登记行指向归档快照，不再是源表：{:?}",
+        row.analytics_table
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

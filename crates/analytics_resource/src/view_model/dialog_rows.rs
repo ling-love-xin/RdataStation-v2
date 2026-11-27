@@ -58,6 +58,10 @@ pub struct TrashRow {
     pub payload_mode: PayloadMode,
     /// 登记行 id（reference 条目按它复活 / 永久删除；copy 条目一并带上，动作分派统一口径）。
     pub resource_id: String,
+    /// 条目来自全局回收站（`data/trash/global`）而不是项目 `.RSmeta/trash`。
+    ///
+    /// 动作分派据此转到全局实例：`trash_id` 形如 `global:<name>`。
+    pub is_global: bool,
     /// 是否有受管本体在回收站：copy = true（本体在 `ProjectTrash`）；reference = false（本体留源位置）。
     pub has_payload: bool,
 }

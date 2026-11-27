@@ -20,16 +20,16 @@ struct Candidate {
 /// 2. **相邻版本差异**（大小 ±N · 指纹是否变）——不做行级 diff，两个值就够一眼看出
 ///    “这一版改了多大”；
 ///
-/// `payload_ok` = 当前本体在位（当前版本行的“副本”就是本体）；`copies` = 有内容副本的
-/// 历史版本号（`PayloadStore::version_copies`）——两者都是宿主在取数线程上问过文件系统
-/// 才有的，不在渲染期算。
+/// `payload_ok` = 当前本体在位（当前版本行的“可还原内容”就是本体）；`file_versions` =
+/// 有 manifest 的文件版本索引——两者都是宿主在取数线程上查过文件系统 / 库才有的，不在渲染期算。
 ///
 /// 历史行的大小 / 指纹只能从快照 JSON 里取（表结构如此）；解析失败就**留空**，
 /// 不拿当前版本的值顶替——那会伪造历史。
 pub fn build_version_rows(
     current: &AnalyticsResource,
     versions: &[crate::store::rows::ResourceVersion],
-    copies: &[i32],
+    file_versions: &[crate::store::file_asset::FileAssetVersion],
+    table_versions: &[crate::store::table_asset::TableAssetVersion],
     payload_ok: bool,
 ) -> Vec<VersionRow> {
     let mut candidates = vec![Candidate {
@@ -47,23 +47,54 @@ pub fn build_version_rows(
     let is_global_ref = crate::ArchiveKind::from_db_str(&current.kind)
         == crate::ArchiveKind::TableRef
         && current.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL);
-    for version in versions {
-        // 快照是当时那条资源记录的序列化；字段结构随迁移演进，解析不出来不算错。
-        let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
-        candidates.push(Candidate {
-            version: version.version,
-            size: snapshot.as_ref().and_then(|record| record.file_size),
-            hash: snapshot
-                .as_ref()
-                .and_then(|record| record.content_hash.clone()),
-            time: version.created_at,
-            is_current: false,
-            has_copy: if is_table {
-                crate::table_asset::snapshot_table(&version.snapshot).is_some()
-            } else {
-                copies.contains(&version.version)
-            },
-        });
+    if is_table {
+        // 表资产的历史版本只认快照索引：一版一张冻结快照，manifest 就是内容指纹。
+        // 旧 `analytics_resource_versions` 的 JSON 快照不再参与表型版本历史。
+        for version in table_versions
+            .iter()
+            .filter(|version| version.version != current.version)
+        {
+            candidates.push(Candidate {
+                version: version.version,
+                size: None,
+                hash: Some(version.manifest_id.clone()),
+                time: version.created_at,
+                is_current: false,
+                has_copy: true,
+            });
+        }
+    } else {
+        if versions.is_empty() && !file_versions.is_empty() {
+            // 全局文件版本链只有 `file_asset_versions`（每版一行资源，没有 JSON 旧行）：
+            // 历史时间 / 指纹从版本索引取，体积缺失给空串（不拿当前版本顶替）。
+            for version in file_versions
+                .iter()
+                .filter(|version| version.version != current.version)
+            {
+                candidates.push(Candidate {
+                    version: version.version,
+                    size: None,
+                    hash: Some(version.content_hash.clone()),
+                    time: version.created_at,
+                    is_current: false,
+                    has_copy: !version.content_pruned,
+                });
+            }
+        }
+        for version in versions {
+            // 快照是当时那条资源记录的序列化；字段结构随迁移演进，解析不出来不算错。
+            let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
+            candidates.push(Candidate {
+                version: version.version,
+                size: snapshot.as_ref().and_then(|record| record.file_size),
+                hash: snapshot
+                    .as_ref()
+                    .and_then(|record| record.content_hash.clone()),
+                time: version.created_at,
+                is_current: false,
+                has_copy: file_versions.iter().any(|file| file.version == version.version),
+            });
+        }
     }
     candidates.sort_unstable_by(|a, b| b.version.cmp(&a.version));
 

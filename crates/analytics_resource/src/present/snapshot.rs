@@ -14,7 +14,8 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         statuses,
         history_counts,
         recent_versions,
-        version_copies,
+        restorable_versions,
+        table_versions,
         tags: tags_by_resource,
         tag_dictionary,
         folders: folders_by_resource,
@@ -23,6 +24,8 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         assertions,
         lifecycles,
         dispatch_usage,
+        global_table_versions,
+        global_file_versions,
         read_only,
         now,
     } = inputs;
@@ -51,6 +54,21 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
             },
         }
         let history_count = history_counts.get(&resource.id).copied().unwrap_or(0);
+        // 项目表资产的版本链只认 `table_asset_versions`；资源版本表不写表快照。
+        // 表型有链时用链长算历史数，避免详情说“0 个历史版本”却又能打开版本列表。
+        let project_table_versions = if row.kind == ArchiveKind::AnalyticsTable {
+            table_versions.get(&resource.id).cloned().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let history_count = if project_table_versions.is_empty() {
+            history_count
+        } else {
+            project_table_versions
+                .iter()
+                .filter(|version| version.version < resource.version)
+                .count() as i64
+        };
         // 「最近 3 条」明细：同一批取数（`recent_versions_by_resource`）按行给，
         // 没有历史的存档拿到空切片 → 详情只留「只有当前版本」一行。
         let recent = recent_versions
@@ -88,15 +106,14 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                 // 项目行没有「被谁用过」这回事：它的来源在 `promoted_from`。
                 dispatch_label: String::new(),
                 // `None` = 这一行没问到副本清单（不是“一份都没有”）。
-                version_copies: version_copies.get(&resource.id).cloned(),
+                restorable_versions: restorable_versions.get(&resource.id).cloned(),
+                table_versions: project_table_versions,
+                file_versions: Vec::new(),
             },
         );
         // 业务断言与效力随快照下发：详情面板只读，不在渲染期查库。
         detail.assertion = assertions.get(&resource.id).cloned();
-        detail.lifecycle = lifecycles
-            .get(&resource.id)
-            .copied()
-            .unwrap_or_default();
+        detail.lifecycle = lifecycles.get(&resource.id).copied().unwrap_or_default();
         details.insert(resource.id.clone(), detail);
         rows.push(row);
     }
@@ -105,12 +122,54 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
     // 历史版本计数也不进项目版本表；动作区由渲染层按 `scope` 收敛到「分发到本项目」。
     for resource in &global_resources {
         let preview = previews.get(&resource.id).cloned().unwrap_or_default();
+        let is_table = ArchiveKind::resolve(&resource.kind, resource.analytics_table.as_deref())
+            == ArchiveKind::AnalyticsTable;
+        let table_versions = if is_table {
+            global_table_versions
+                .get(&resource.id)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let file_versions = if is_table {
+            Vec::new()
+        } else {
+            global_file_versions
+                .get(&resource.id)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let history_count = if is_table {
+            table_versions
+                .iter()
+                .filter(|version| version.version < resource.version)
+                .count() as i64
+        } else {
+            file_versions
+                .iter()
+                .filter(|version| version.version < resource.version)
+                .count() as i64
+        };
+        let restorable_versions = if is_table {
+            None
+        } else if file_versions.is_empty() {
+            None
+        } else {
+            Some(
+                file_versions
+                    .iter()
+                    .filter(|version| !version.content_pruned)
+                    .map(|version| version.version)
+                    .collect(),
+            )
+        };
         details.insert(
             resource.id.clone(),
             to_detail(
                 resource,
                 ArchiveStatus::Normal,
-                0,
+                history_count,
                 &[],
                 DetailExtras {
                     tags: Vec::new(),
@@ -120,8 +179,10 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                     preview,
                     // 全局行才有的那一行「谁在用」：没人用过给空串（详情不画空行）。
                     dispatch_label: dispatch_detail_label(dispatch_usage.get(&resource.name)),
-                    // 全局行没有项目侧版本副本（本体在全局实例）。
-                    version_copies: None,
+                    // 全局文件的历史副本由 `file_asset_versions` 给；表则由快照版本链给。
+                    restorable_versions,
+                    table_versions,
+                    file_versions,
                 },
             ),
         );

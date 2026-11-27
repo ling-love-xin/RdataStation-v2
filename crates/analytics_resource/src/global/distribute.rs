@@ -1,4 +1,4 @@
-//! 全局 → 项目分发：COPY parquet 中转 → CTAS。
+//! 全局 → 项目分发：同根跨库 CTAS。
 
 use super::*;
 
@@ -15,6 +15,9 @@ pub(super) type DistributionRow = (
     Option<i32>,
     Option<i64>,
     Option<String>,
+    Option<String>,
+    // 表型快照的物理 schema；文件型 / 旧数据文件表为 `None`。
+    Option<String>,
 );
 
 fn map_distribution_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DistributionRow> {
@@ -29,6 +32,8 @@ fn map_distribution_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Distributio
         row.get(7)?,
         row.get(8)?,
         row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
     ))
 }
 
@@ -43,14 +48,56 @@ impl GlobalInstanceStore {
         selected_version: Option<i32>,
     ) -> Result<Option<DistributionRow>, CoreError> {
         self.with_sqlite(|conn| {
+            let kind: Option<String> = conn
+                .query_row(
+                    r#"
+                    SELECT kind FROM analytics_resources
+                    WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
+                    ORDER BY version DESC LIMIT 1
+                    "#,
+                    rusqlite::params![name],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sqlite_err("read_global_row_kind"))?;
+            let Some(kind) = kind else {
+                return Ok(None);
+            };
+            if kind == "analysis" {
+                let row = conn
+                    .query_row(
+                        r#"
+                        SELECT ar.id, tav.version, ar.kind, ar.content_hash, ar.file_rel_path,
+                               ar.definition_sql, tm.row_count, tm.column_count, ar.file_size,
+                               ts.physical_table, tav.manifest_id, ts.physical_schema
+                        FROM analytics_resources ar
+                        JOIN table_asset_versions tav
+                          ON tav.asset_id = ar.id
+                         AND tav.version = COALESCE(?2, ar.version)
+                        JOIN table_snapshots ts ON ts.snapshot_id = tav.snapshot_id
+                        JOIN table_manifests tm ON tm.manifest_id = tav.manifest_id
+                        WHERE ar.name = ?1 AND ar.scope = 'global' AND ar.deleted_at IS NULL
+                        LIMIT 1
+                        "#,
+                        rusqlite::params![name, selected_version],
+                        map_distribution_row,
+                    )
+                    .optional()
+                    .map_err(sqlite_err("read_global_table_row"))?;
+                // 表资产必须命中快照版本链；没有索引说明数据已丢失，不再回退旧单行。
+                return Ok(row);
+            }
             let row = match selected_version {
                 Some(version) => conn
                     .query_row(
                         r#"
-                        SELECT id, version, kind, content_hash, file_rel_path, definition_sql,
-                               row_count, column_count, file_size, analytics_table
-                        FROM analytics_resources
-                        WHERE name = ?1 AND scope = 'global' AND version = ?2
+                        SELECT ar.id, ar.version, ar.kind, ar.content_hash, ar.file_rel_path,
+                               ar.definition_sql, ar.row_count, ar.column_count, ar.file_size,
+                               ar.analytics_table, fav.manifest_id, NULL
+                        FROM analytics_resources ar
+                        LEFT JOIN file_asset_versions fav
+                          ON fav.resource_id = ar.id AND fav.version = ar.version
+                        WHERE ar.name = ?1 AND ar.scope = 'global' AND ar.version = ?2
                         LIMIT 1
                         "#,
                         rusqlite::params![name, version],
@@ -61,11 +108,14 @@ impl GlobalInstanceStore {
                 None => conn
                     .query_row(
                         r#"
-                        SELECT id, version, kind, content_hash, file_rel_path, definition_sql,
-                               row_count, column_count, file_size, analytics_table
-                        FROM analytics_resources
-                        WHERE name = ?1 AND scope = 'global' AND deleted_at IS NULL
-                        ORDER BY version DESC LIMIT 1
+                        SELECT ar.id, ar.version, ar.kind, ar.content_hash, ar.file_rel_path,
+                               ar.definition_sql, ar.row_count, ar.column_count, ar.file_size,
+                               ar.analytics_table, fav.manifest_id, NULL
+                        FROM analytics_resources ar
+                        LEFT JOIN file_asset_versions fav
+                          ON fav.resource_id = ar.id AND fav.version = ar.version
+                        WHERE ar.name = ?1 AND ar.scope = 'global' AND ar.deleted_at IS NULL
+                        ORDER BY ar.version DESC LIMIT 1
                         "#,
                         rusqlite::params![name],
                         map_distribution_row,
@@ -135,7 +185,7 @@ impl GlobalInstanceStore {
         let (
             global_id,
             global_version,
-            _kind,
+            global_kind,
             global_hash,
             rel_path,
             definition_sql,
@@ -143,31 +193,50 @@ impl GlobalInstanceStore {
             _global_cols,
             global_size,
             global_table,
+            manifest_id,
+            source_schema,
         ) = global_row.ok_or_else(|| InstanceOpError::NotFound {
             name: name.to_string(),
         })?;
+        // 形态以登记 `kind` 为准：`file` 才按文件分发。数据文件升级后虽然也留了
+        // 本体（用于版本恢复），它的共享形态仍是表，不能被 `file_rel_path` 误判。
+        let is_file = global_kind == "file";
 
         // 源表：G2 起由登记行 `analytics_table` 给出实际表名；老行（迁移 036 之前）
         // 那列是空的，回退到资产名——那时表名就等于资产名。
         let source_table = global_table.unwrap_or_else(|| name.to_string());
 
         // 内容表可能已被 `KeepVersions` 裁掉（登记行还在、表没了）。
-        // 不前置检查的话，后面的 `COPY` 会抛 DuckDB 的 Catalog Error，
+        // 不前置检查的话，后面的跨库 CTAS 会抛 DuckDB 的 Catalog Error，
         // 用户看不出这是「策略清掉的」而不是「数据坏了」。
-        if !self.table_exists(&source_table).await? {
-            return Err(InstanceOpError::Core(CoreError::common(
-                CommonError::General(format!(
-                    "全局实例「{name}」v{global_version} 的内容表（{source_table}）已被保留策略清理：\
+        // 文件-first 的新行没有 analytics_table；只有旧脚本内容表 / 表型才查表。
+        if !(is_file && manifest_id.is_some()) {
+            let exists = if let Some(schema) = source_schema.as_deref() {
+                self.with_duckdb(|conn| Ok(table_exists_in(conn, schema, &source_table)))
+                    .await?
+            } else {
+                self.table_exists(&source_table).await?
+            };
+            if !exists {
+                return Err(InstanceOpError::Core(CoreError::common(
+                    CommonError::General(format!(
+                        "全局实例「{name}」v{global_version} 的快照（{source_table}）已被保留策略清理：\
 版本元数据仍在，可在全局面板查看版本链；要这一版的数据，在它的来源项目重新升级一版再分发"
-                )),
-            )));
+                    )),
+                )));
+            }
         }
 
         // ---- 项目侧重名双保险探测（SQLite 未删登记 + DuckDB 表 + resources 文件）----
         // 与升级侧 `promote` 同口径：登记层与本体层任一命中都按冲突走询问，不静默覆盖。
         // 命中层名一并回传：冲突框要说清是登记、是表、还是文件。
-        if let Some(field) =
-            project_name_taken(project, project_root, &target_name, rel_path.as_deref()).await?
+        if let Some(field) = project_name_taken(
+            project,
+            project_root,
+            &target_name,
+            if is_file { rel_path.as_deref() } else { None },
+        )
+        .await?
         {
             return Err(InstanceOpError::Conflict {
                 name: target_name,
@@ -176,68 +245,97 @@ impl GlobalInstanceStore {
         }
 
         // ---- 形态判定 + 落项目 ----
-        let shape = if let Some(rel) = rel_path.as_deref() {
-            // 脚本内容表 → 重建为文件（File 档）。
-            let content = self
-                .read_script_content(&source_table)
+        let shape = if is_file {
+            let Some(rel) = rel_path.as_deref() else {
+                return Err(InstanceOpError::Core(CoreError::common(
+                    CommonError::General(format!(
+                        "全局文件资产「{name}」没有登记本体相对路径，无法分发"
+                    )),
+                )));
+            };
+            // 文件-first：文件版本必须有 manifest，从全局 CAS 物化；没有 manifest
+            // 的旧文件行不再支持分发。
+            let Some(manifest_id) = manifest_id.as_deref() else {
+                return Err(InstanceOpError::Core(CoreError::common(
+                    CommonError::General(format!(
+                        "全局文件资产「{name}」v{global_version} 没有 manifest：旧文件资产不再支持分发"
+                    )),
+                )));
+            };
+            let cas = crate::payload::cas::CasStore::at_root(self.system_dir.join("cas"));
+            let manifest = cas
+                .read_manifest(manifest_id)
                 .await
                 .map_err(InstanceOpError::Core)?;
-            write_project_file(project_root, rel, &content, &target_name)
+            let entry = manifest.content_entry().ok_or_else(|| {
+                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
+                    "全局文件「{name}」v{global_version} 的 manifest 缺少 Content"
+                ))))
+            })?;
+            let blob = cas.blob_path(&entry.hash).map_err(InstanceOpError::Core)?;
+            let store = crate::payload::PayloadStore::new(project_root);
+            let staged = store
+                .stage_payload(&blob, rel)
+                .await
                 .map_err(InstanceOpError::Core)?;
-            let outcome = self
+            store
+                .commit_staged(&staged, rel)
+                .await
+                .map_err(InstanceOpError::Core)?;
+            let content_hash = global_hash.clone().unwrap_or(manifest.content_hash);
+            let outcome = match self
                 .register_project_file(
                     project,
                     &target_name,
                     rel,
                     global_id.as_str(),
                     global_version,
-                    global_hash.as_deref(),
+                    Some(content_hash.as_str()),
                     global_size,
                 )
                 .await
-                .map_err(InstanceOpError::Core)?;
+            {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    // 本体已经从全局 CAS 物化到 `resources/`：登记失败必须把这份
+                    // 无主文件收掉，否则项目里会留下“文件在、资产不在”的残留。
+                    let dest = store
+                        .resolve(rel)
+                        .unwrap_or_else(|_| project_root.join(crate::payload::RESOURCES_DIR_NAME).join(rel));
+                    if let Err(cleanup) = tokio::fs::remove_file(&dest).await {
+                        if cleanup.kind() != std::io::ErrorKind::NotFound {
+                            tracing::error!(
+                                error = %cleanup,
+                                path = %dest.display(),
+                                "分发登记失败后清理已物化文件失败"
+                            );
+                        }
+                    }
+                    return Err(InstanceOpError::Core(error));
+                }
+            };
             outcome
         } else {
             // 分析表 / 数据文件映射表 → 建项目表（`AnalyticsTable` 档）。
-            // 数据搬运路径：全局连接 `COPY ... TO parquet` → 项目连接
-            // `CREATE TABLE AS SELECT read_parquet(...)`。
-            // 为什么不用 ATTACH：Windows 单句柄限制下，项目连接 ATTACH 全局 DuckDB
-            // 文件会撞「文件被占用」（全局写连接由 GlobalDatabaseManager 持有，不能关）。
-            // Parquet 是 DuckDB 原生格式，中转确定性、无锁冲突。
-            // 中转 parquet 落 `paths::temp_dir()`：运行时数据路径只有一个解析点
-            // （rds-architecture），系统临时目录在只读盘 / 多用户 / 清理策略下不可控。
-            let tmp_dir = paths::temp_dir();
-            std::fs::create_dir_all(&tmp_dir).map_err(|e| {
-                InstanceOpError::Core(CoreError::common(CommonError::General(format!(
-                    "创建临时目录失败（{}）：{}",
-                    tmp_dir.display(),
-                    e
-                ))))
-            })?;
-            let tmp = tmp_dir.join(format!("rds_dist_{}.parquet", uuid::Uuid::new_v4().simple()));
-            let copy_sql = format!(
-                "COPY {} TO '{}' (FORMAT PARQUET);",
-                quote_ident(&source_table),
-                tmp.to_string_lossy().replace('\\', "/")
-            );
-            let copy_result = self
-                .with_duckdb(|conn| {
-                    conn.execute_batch(&copy_sql)
-                        .map_err(|e| duckdb_err("distribute_copy_out", &e.to_string()))?;
-                    Ok(())
-                })
-                .await;
-            // COPY 失败时 `?` 会提前返回，后面那句「用后即删」就执行不到——
-            // 先把可能已生成的半截 parquet 收掉，别往系统临时目录漏文件。
-            if copy_result.is_err() {
-                let _ = std::fs::remove_file(&tmp);
-            }
-            copy_result?;
-
+            // 2026-11-26 所有权收口后全局库与项目库同处 `shared::duckdb_root` 一条根连接：
+            // 项目会话直接读 `rds_global.<源表>` 建 `analytics.<目标表>`，不再 COPY 中转。
+            let source_ref = match source_schema.as_deref() {
+                Some(schema) => format!(
+                    "{}.{}.{}",
+                    quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+                    quote_ident(schema),
+                    quote_ident(&source_table)
+                ),
+                None => format!(
+                    "{}.{}",
+                    quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+                    quote_ident(&source_table)
+                ),
+            };
             let create_sql = format!(
-                "CREATE TABLE {} AS SELECT * FROM read_parquet('{}');",
+                "CREATE TABLE {}.{} AS SELECT * FROM {source_ref};",
+                quote_ident(shared::duckdb_root::PROJECT_ALIAS),
                 quote_ident(&target_name),
-                tmp.to_string_lossy().replace('\\', "/")
             );
             let mut guard = project.0.lock().await;
             let conn = guard.as_mut().ok_or_else(|| {
@@ -245,14 +343,9 @@ impl GlobalInstanceStore {
                     "项目 DuckDB 连接已关闭".to_string(),
                 )))
             })?;
-            let project_result = conn
-                .execute_batch(&create_sql)
-                .map_err(|e| duckdb_err("distribute_create_table", &e.to_string()));
+            conn.execute_batch(&create_sql)
+                .map_err(|e| duckdb_err("distribute_create_table", &e.to_string()))?;
             drop(guard);
-
-            // 临时 parquet 用后即删（失败也尝试清理，不污染系统临时目录）。
-            let _ = std::fs::remove_file(&tmp);
-            project_result?;
 
             let (rows, cols) = match project_table_stats(&project, &target_name).await {
                 Ok(stats) => stats,
@@ -349,7 +442,8 @@ impl GlobalInstanceStore {
             Err(error) => {
                 // 回滚顺序与藏的顺序相反：登记先复活（成本最低，用户最先生效）。
                 if !hidden_registry.is_empty() {
-                    if let Err(rollback) = restore_project_registry(project, &hidden_registry).await {
+                    if let Err(rollback) = restore_project_registry(project, &hidden_registry).await
+                    {
                         tracing::error!(error = %rollback, "覆盖分发回滚：复活登记行失败");
                     }
                 }
@@ -359,7 +453,8 @@ impl GlobalInstanceStore {
                     }
                 }
                 if let Some(backup) = backup_table.as_deref() {
-                    if let Err(rollback) = rename_project_table(project, backup, &target_name).await {
+                    if let Err(rollback) = rename_project_table(project, backup, &target_name).await
+                    {
                         tracing::error!(error = %rollback, "覆盖分发回滚：旧表改名回原位失败");
                     }
                 }
@@ -549,7 +644,6 @@ impl GlobalInstanceStore {
             tracing::warn!(error = %error, global_name, "分发回执写入失败");
         }
     }
-
 }
 
 // ==================== 覆盖式分发的可逆备份（本文件私有）====================
@@ -740,9 +834,9 @@ async fn soft_delete_project_registry(
     let pool = project.1.clone();
     let conn = pool.acquire().await.map_err(InstanceOpError::Core)?;
     let inner = conn.inner().map_err(InstanceOpError::Core)?;
-    inner.execute_batch("BEGIN IMMEDIATE").map_err(|e| {
-        InstanceOpError::Core(sqlite_err("begin_overwrite_registry")(e))
-    })?;
+    inner
+        .execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| InstanceOpError::Core(sqlite_err("begin_overwrite_registry")(e)))?;
     let result = (|| -> Result<Vec<String>, CoreError> {
         let ids: Vec<String> = {
             let mut stmt = inner
@@ -771,9 +865,9 @@ async fn soft_delete_project_registry(
     })();
     match result {
         Ok(ids) => {
-            inner.execute_batch("COMMIT").map_err(|e| {
-                InstanceOpError::Core(sqlite_err("commit_overwrite_registry")(e))
-            })?;
+            inner
+                .execute_batch("COMMIT")
+                .map_err(|e| InstanceOpError::Core(sqlite_err("commit_overwrite_registry")(e)))?;
             Ok(ids)
         }
         Err(error) => {
