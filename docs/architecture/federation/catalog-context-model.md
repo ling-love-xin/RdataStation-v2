@@ -140,8 +140,14 @@ struct SourceIntent { id, origin, alias, auto_attach: bool, primary: bool }
 ## 6. 并发与生命周期
 
 - ATTACH 是实例级，需要实例级锁；DETACH 时若某会话 search_path 仍指向它，DuckDB 会拒绝。
-- `CatalogRegistry` 记引用计数（引用该别名的 Context 数）。有人持有时 DETACH **拒绝并如实报
-  "N 个编辑器正在用"**，不静默打断正在跑的查询。
+- 引用计数（K3③ 已落，2026-11-27）：`AnalysisInstance::catalog_holders(alias, except)` 扫会话
+  的 `mounted_sources()`，**只数 Ready**（失败记录没有 `search_path` 指向它，不算在用），
+  返回持有者**标签**（`编辑器 · 分析.sql`，不是 owner id——错误的读者是用户）。
+  `unmount_conn(conn_id, acting)` 过闸：`acting = None`（面板/项目意图层）**凡有文档会话挂着就拒**；
+  `Some(owner)`（某个文档会话替自己卸）排除它自己。加速档 `accel:<conn_id>` 恒不算持有者。
+  拒绝话术点名谁在用（`{alias} 正被 N 个文档会话使用（A、B）：先关掉它们，或在那些文档里卸掉这条源`）。
+  文件库卸载的唯一事件入口 `file_view::detach_database_global` 过同一道闸（`acting` 恒空）。
+  判定与话术抽成纯函数 `holders_of` / `detach_refusal`，单测直接断言（不靠起会话）。
 - 关项目：先摘 search_path，再按引用计数逐个 DETACH；`rds_tmp` 不跟着清（可查、可手动清）。
 
 ---
@@ -186,7 +192,7 @@ struct SourceIntent { id, origin, alias, auto_attach: bool, primary: bool }
 | **K0b** ✅ | 面板读文件索引取代 `Shared.loaded_files`；该字段整条删除（不留兼容层）；指纹里删掉空的「洞察样本」维度 | 零（输出逐字不变） | `cargo check -p rds-workbench --lib/--tests` 通过；文件索引逐条清理（删视图即忘） |
 | **K1** ✅ | 抽取 `rds-sql::table_paths`（递归全树、CTE/派生表/表函数排除）+ 判定 `editor::exec::preflight`（不存在 / 多源歧义给候选 / 未知 catalog / 源不可用）；联邦与加速两档发送前过闸 | 报错更早更准 | 表驱动：`rds-sql` 9 条抽取 + `editor` 13 条判定（含主源优先、内置库不参与歧义） |
 | K2（已落两刀） | 面板改"源记录 + 可用性分段"，会话行并入。首刀：会话源带 `conn_id`，归属连接在清单里 → 并入连接行（含失败原话）；无归属会话行才兜底。次刀：源段按可用性分两段（`source_section` + rank 0–2 / 3），渲染插子标题 | 重复行消失；"可解析 / 可加入"在界面上分开 | 面板 50 条（含「同连接两文档 = 一行」「分段序不许插回」） |
-| K3（进行中） | 意图清单 replay + 主源持久化；引用计数拒绝 DETACH。**已落两刀（2026-11-27）**：① 别名冲突改拒绝（`MountRegistry::reserve` 报错并点名占用者，同源重挂幂等）；② 主源持久化（`analysis_primary` 单行表 + 036；`publish_project` 发布两张快照；`apply_registered_primary` 让登记主源赢过文档连接，会话重建即 replay） | 重启不丢主源；冲突从静默改名变报错 | K3①：engine lib 355 passed；K3②：store 13 条 / editor 组装 18 条全过。待做：引用计数拒绝 DETACH；headless probe（restart 后 catalog 与 primary 恢复） |
+| K3（已落三刀） | 意图清单 replay + 主源持久化；引用计数拒绝 DETACH。① 别名冲突改拒绝（`MountRegistry::reserve` 报错并点名占用者，同源重挂幂等）；② 主源持久化（`analysis_primary` 单行表 + 036；`publish_project` 发布两张快照；`apply_registered_primary` 让登记主源赢过文档连接，会话重建即 replay）；③ 引用计数闸（`catalog_holders` + `holders_of` + `detach_refusal`；`unmount_conn(conn_id, acting)` 与 `file_view::detach_database_global` 双入口过闸） | 重启不丢主源；冲突从静默改名变报错；有人在用不许摘 | K3①：engine lib 355 passed；K3②：store 13 条 / editor 组装 18 条全过；K3③：engine lib **356 passed**（含 `holders_count_only…` 与「面板卸被拒 / 自己的会话发起放行」两段），workbench lib 225 passed，`cargo check -p rds-workbench --lib --tests` 通过。待做：headless probe（restart 后 catalog 与 primary 恢复） |
 
 K0a 是唯一前置，且行为零变化，可先合。
 
@@ -203,6 +209,7 @@ K0a 是唯一前置，且行为零变化，可先合。
 | 主源只在会话内存（`AnalysisSession::primary`） | K3② 已改：会话里的 `search_path` 只是运行态，意图写 `analysis_primary`，组装时覆盖、重建即 replay |
 | 面板 `Object::rank()` 按身份类型分档 | K2 换成"可用性"维度：可解析 → 意向未生效 → 可加入 |
 | 联邦路径的 `alias_owner` 预检 | 保留，作为 §2.3 别名纪律的现成实现 |
+| `unmount_conn(conn_id)` 只有"卸"没有"有人在用就不许卸" | K3③ 已改：签名加 `acting: Option<&str>`（`None` = 面板/项目意图层，一律拒；`Some(owner)` = 某文档会话替自己卸，排除自己） |
 
 ---
 
@@ -220,3 +227,6 @@ K0a 是唯一前置，且行为零变化，可先合。
 
 - 2026-11-27：立稿；K0a 落地（`catalog.rs` + `file_view` 路径索引）。
 - 2026-11-27：K3 首刀（别名冲突即拒绝）；K3 次刀（主源进 `analysis_primary`，`apply_registered_primary` 接管主源优先）。
+- 2026-11-27：K3 第三刀（引用计数拒绝 DETACH）：`catalog_holders` / `holders_of` / `detach_refusal`
+  + `unmount_conn(conn_id, acting)` 语义分层 + `file_view::detach_database_global` 同一道闸；
+  既有测试 `unmounting_a_primary_source_falls_back_to_memory` 改成两段（面板卸被拒 / 自己的会话放行）。

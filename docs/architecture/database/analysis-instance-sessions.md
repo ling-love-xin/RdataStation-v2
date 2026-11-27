@@ -92,7 +92,8 @@
 | `AnalysisInstance::list_mounted_tables_for_conn(conn_id)` | 面板叶子：控制连接查元数据，限定名按登记的 `kind` 拼 |
 | `AnalysisInstance::session_for_conn(conn_id)` | 载入 / 归档「在这个源上再跑一条 SQL」；**不负责挂载** |
 | `AnalysisInstance::interrupt_conn(conn_id)` | 界面「取消」按源，不按会话 id |
-| `AnalysisInstance::unmount_conn(conn_id)` | 右键「卸载」：`DETACH` + 放别名 + 关该源会话，只断挂载不动连接 |
+| `AnalysisInstance::unmount_conn(conn_id, acting)` | 右键「卸载」：先过引用计数闸（有文档会话持有就拒并点名；`acting` 指发起者，面板传 `None`）→ `DETACH` + 放别名 + 关该源会话，只断挂载不动连接 |
+| `AnalysisInstance::catalog_holders(alias, except)` | 引用计数读口：数**Ready** 挂载的会话，返回标签（`except` 排除加速档自己 / 发起卸载的会话） |
 
 判定"这个源挂没挂"一律读 `alias_for_conn`，**不再**由 `accel::session_for(conn_id).is_some()` 回答——
 那是旧的多实例口径，单实例下它必然为 `None`（加速档已不在自建会话）。

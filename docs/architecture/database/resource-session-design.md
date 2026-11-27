@@ -116,7 +116,7 @@ owner 就是会话身份，**不许为空**（`ensure_session` 首行 `instance.
 | `close_session(id)` | `instance.rs:588` | — | 已关返回 `false` | 不 `DETACH`（`ATTACH` 是实例级） |
 | `close_all_sessions()` | `instance.rs:610` | — | 是 | `rds_tmp` 不动 |
 | `reserve_alias(wanted, conn_id, kind)` | `instance.rs:626` | wanted 非保留字 | 是（同 conn 回原名） | 保留别名 / 空名 → `Err` |
-| `unmount_conn(conn_id)` | `instance.rs:730` | 源已挂 | 是 | 逐会话 `forget_mounted` + `reset_search_path` |
+| `unmount_conn(conn_id, acting)` | `instance.rs` | 源已挂 | 是 | 引用计数闸（`acting=None` 凡有文档在用即拒；`Some(owner)` 排除自己）+ 逐会话 `forget_mounted` + `reset_search_path` |
 | `hide_base(alias)` / `show_base(alias)` | `instance.rs:384/401` | 只认 `bases()` 里的别名 | 是 | 源别名一律拒 |
 | `register_temp(name, created_by, note)` | `instance.rs` | 名非空 | 是（同名覆盖登记） | — |
 | `drop_temp(name)` | `instance.rs:896` | — | 是 | 先删表再销两处登记；删不到也销登记 |
@@ -138,7 +138,7 @@ owner 就是会话身份，**不许为空**（`ensure_session` 首行 `instance.
                                    ├─ Accelerated   → accel::ensure_on_instance(src, owner=?)
                                    └─ Federated     → ensure_session(owner) → mount_sources → retain_mounted → use_catalog
 面板挂载 ──► data_objects_load ──► accel::ensure_on_instance(src, "data_objects")
-面板卸载 ──► SourceAction::ToggleMount ──► instance.unmount_conn(conn)
+面板卸载 ──► SourceAction::ToggleMount ──► instance.unmount_conn(conn, None)   # 有人在用即拒并点名
 面板底座 ──► SourceAction::ToggleBase  ──► instance.hide_base / show_base
 关文档   ──► editor on_removed ──► instance.drop_temps_of(doc) ──► close_session(session.id)
 mock 落库 ──► mock_generator::persist_table_at ──► MockEngine::write_temp_table_to_database ──► instance.drop_temp
