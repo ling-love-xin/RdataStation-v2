@@ -147,10 +147,12 @@
 - 影响：后续按文档做判断会得出「Oracle 也有引擎级只读」的错误结论；「必须用只读账号」这条产品约束目前只在代码注释里。
 - 验收：`catalog-context-model.md` §8 #5 加 Oracle 例外与三层缓解；§11② 改为「L1 全强制、L2 靠会话层 + 账号」；§11③ 拆分为「MSSQL 驱动形态未定 / Oracle 已按 community scanner 落地」；同时确认连接对话框在 Oracle 类型上有「只读账号」提示（**未取证，需核 `connection_dialog`**）。
 
-**P0-3 跨源类型保真**
-- 现状：`duckdb_service.rs:507` Decimal256 直接报错；`DECIMAL→DOUBLE` 只警告「未做」（文档 `:102` 自述）。
+**P0-3 跨源类型保真 —— 部分执行（刀30，2026-11-27）**
+- 原现状：`duckdb_service.rs` 的 `Decimal256` 直接报错；`DECIMAL→DOUBLE` 只警告「未做」（文档 `:102` 自述）。
 - 影响：跨源同名列 join 静默降级或直接失败，用户拿不到「哪一列被降级」的解释。
-- 验收：新增「跨源列类型对照 + 降级提示」的数据结构，预检/执行各报一次（不阻断）；补一条用例：MySQL `DECIMAL(65,30)` × PG `NUMERIC` 同名列 join 时给出提示而非报错。
+- 刀30 落地（两条实测根因）：DuckDB 的 DECIMAL 宽度上限是 **38**（2.0.1 实测 `CREATE TABLE t(x DECIMAL(39,30))` → `Binder Error: DECIMAL type width must be between 1 and 38`）；且 DuckDB 的 **Arrow→DuckDB 转换不认 Decimal256**（原话 `Data type "Decimal256(65, 30)" not yet supported by Arrow-to-DuckDB conversion`）——所以「声明成 DOUBLE」也过不了 append。做法：直灌前在 Arrow 层 `cast` 成 `Float64` 再声明 `DOUBLE`，降级说明（列名 / 上限 38 / 丢小数位）走 `tracing::warn!`。
+- 已达成验收：`Decimal256(65,30)` 直灌建表成功、列类型落 `DOUBLE`（`decimal256_column_survives_the_arrow_passthrough`）；`Decimal128(38,10)` 仍无损（`decimal256_is_taken_as_double_with_a_downgrade_note`）。
+- 仍未做（记 **30b**）「预检侧同名列类型对照」：预检的 `Facts` 只有表名事实、没有列类型；要做需先补 `duckdb_columns()` 列类型快照 + join 键列抽取。原验收口径（MySQL `DECIMAL(65,30)` × PG `NUMERIC` 真机 join 给提示）在 30b 才能闭环。
 
 ### P1 —— 能力缺口（影响对标）
 
@@ -215,7 +217,7 @@
 | 1 | 删 `legacy` 死面 + 收 `pub use`（P0-1）**——已执行（刀27）** | `duckdb/federation/{legacy,mod}.rs`、`engine/src/lib.rs`、`duckdb/mod.rs` | `cargo check -p rds-engine` 通过；`cargo test -p rds-engine --lib` **345 passed / 0 failed**；`grep FederationManager` 在 `crates` 下清零 |
 | 2 | 文档按 Oracle 现实改写（P0-2）**——已执行（刀28）** | `docs/architecture/federation/catalog-context-model.md` §8 #5 / §11；`driver-capability-matrix.md` §1 / §4 | 逐条对照 `accel.rs:171-174`、`session.rs::l2_write_refusal`、`registry.rs:558-596`；文档内「一律只读」表述不再与实现冲突 |
 | 3 | 接 `ExplainAnalyzer` 进结果区（P1-5） | `crates/editor`（结果区）、`engine/duckdb/explain.rs` | 新用例：联邦源计划里「过滤在扫描节点之上」可被识别并渲染 |
-| 4 | 跨源类型降级提示（P0-3） | `engine/services`、预检 | 新用例：DECIMAL 同名列 join 给提示不报错 |
+| 4 | 跨源类型降级提示（P0-3）**——部分执行（刀30）** | `engine/services/duckdb_service.rs`；预检侧列类型对照记 30b | Decimal256 直灌从「报错」改为「Arrow 层 cast 成 DOUBLE + 带列名的降级说明」（两条单测）；「同名列 join 给提示」需先补列类型事实，未做 |
 | 5 | 真机门控脚本（§5） | `tools/` + `.rds/tmp/` 日志 | 一次跑通 MySQL / PG / SQLite / Oracle 四类，日志可追溯 |
 
 顺序理由：1、2 是「把账做平」（不改行为，风险最低）；3、4 是「把可见性补齐」（直接对着竞品差距）；5 是「把证据补齐」，为后续任何扩展（含 MSSQL、双轨）提供可比较的基线。
@@ -250,6 +252,8 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 | 刀28 | 2026-11-27 | 文档对账：`catalog-context-model.md` §8 #5（源只读加 L2 Oracle 例外）、§11②③（L1 强制 / Oracle 已落地 / 只剩 MSSQL 驱动形态未定）、§12 变更记录；`driver-capability-matrix.md` §1 联邦行写操作列、§4 联邦硬约束段；顺手删 §4 表里重复的一条 SQLite 行 | 文档内「一律只读」表述与 `accel.rs:171-174`、`session.rs::l2_write_refusal`、`registry.rs:558-596` 三处对上；纯文档，无编译面 | 完成 |
 
 | 刀29 | 2026-11-27 | 重写 `duckdb/explain.rs`：计划解析改走 `EXPLAIN (FORMAT JSON)`（DuckDB 默认 `EXPLAIN` 是框线图，原实现按行缩进建树且只在栈空时入栈、栈长恒 ≤1，除根外全部平铺；还误把第 0 列 `explain_key` 当计划正文）；`PlanNode` 增 `operator` / `extra_info`；新增 `SourceScanFacts` + `collect_source_scans` 判「投影已推 / 过滤未推」；外部源算子不再计入 `has_full_table_scan`；`duckdb/mod.rs`、`engine/src/lib.rs` 导出新类型 | `cargo check -p rds-engine` 通过；`cargo test -p rds-engine --lib` **353 passed**（explain 单测 11 → 18，含真实 DuckDB 链路与 L1/Oracle 台账等价形状） | 完成（引擎侧）；结果区接入记 29b（`explain_current` 走异步执行通道，需先摸清结果集注入） |
+
+| 刀30 | 2026-11-27 | `duckdb_service.rs`：`duckdb_type_of` 拆成 `map_arrow_type`（返回类型 + 降级说明），新增 `cast_decimal256_columns` 在直灌前把 Decimal256 列 cast 成 `Float64`；`create_temp_table_from_batches` 收集降级并带列名 `tracing::warn!` | 两条实测：DuckDB DECIMAL 上限 38（`DECIMAL(39,30)` 被拒）；Arrow→DuckDB 不认 Decimal256（`not yet supported by Arrow-to-DuckDB conversion`）。新增 2 条单测；`cargo test -p rds-engine --lib` **355 passed** | 完成（直灌路径）；预检侧同名列类型对照记 30b |
 
 **刀27 备注**
 
