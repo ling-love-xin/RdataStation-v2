@@ -269,6 +269,7 @@
 |---|---|---|---|---|
 | rds-workbench（修前） | 44 | 400 | 8 | 见下表归因 |
 | rds-workbench（刀42 后） | 44 | **404** | **4** | 剩 2 条并行 analytics 线、1 条本地探针、1 条真问题（见末行） |
+| rds-workbench（刀44 后） | 44 | **408** | **0** | 4 红全部结清（`1d2befab`） |
 
 | 红 target | 现象 | 归因 |
 |---|---|---|
@@ -380,10 +381,14 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 
 | 刀43 | 2026-11-28 | `crates/editor/src/exec/preflight.rs` 加 `Facts::local_tables_visible()`：裸名一个源都没命中时，若本机临时区（`temp`/`memory`）**列不出来**就放行（看不见 ≠ 不存在，符合预检头部 §4 口径）——临时表是连接级的，预检的 control 连接看不到执行连接建的 `TEMP TABLE`（真机：`duckdb_tables()` 里确有 `temp.rds_accel_vars`）。同时按真机事实改写 `editor_exec_real` ⑤：源端新建表在旧 ATTACH 会话**实时可见**（原「不该可见」是预检拦出来的假象），并补 `DROP TABLE IF EXISTS` 让该段幂等 | `exec::preflight` **14 passed**（含新用例）；`rds-editor --lib` **891 / 0 / 4 ignored**；`editor_exec_real` **3 passed / 0 failed / 19.22s**；gate workbench **44 / 404 / 4**（4 红 = 2 条并行 analytics 线 + `zz_fixture_probe` 本地探针 + `mock_generator` 文件占用偶发） | 完成（真机验证） |
 
-**刀42 留下的红**（第 1 条已由刀43 修掉；其余不属本审计或 CI 不可见）
+| 刀44 | 2026-11-28 | workbench 剩余 4 红结清。①`data_source_lifecycle`：旧用例假设「未开联邦加速就不注册 Secret」被 2026-11-27 的新口径推翻（`data_source_service.rs:820-827` 注释 + `secret_integration::has_federable_extension` 静态名单：有 DuckDB 扩展就注册），用例改名 `save_registers_secret_by_capability_not_by_switch`，断言 `mgr.list().len() == 1`。②`ui_contract`：`shared.rs:440` 新增的 `stale_publish_dialog` 补进白名单，`panels-modules.md` M6 段补该流转字段。③**真缺陷（产品面）**：`mysql_native::new_with_tls` 直接 `mysql_async::Opts::from_url`，而该库遇未知键**直接报错**；连接对话框按 `mysql`（sqlx）词汇把 `ssl-mode` / `ssl-ca` / `ssl-cert` / `ssl-key` 拼进 URL，内核把 `mysql` 解析到本驱动后 `parse_url` 必失败 —— 真机复现「选 MySQL + SSL 连不上」。改为 `strip_sqlx_ssl_params` 剥掉这四个键后重解析一次（证书与校验仍走 `TlsRequest`），新增单测。④本地探针 `zz_fixture_probe` 夹具改用内核真实注册的 `mysql_native` / `postgres_native`（`mysql` / `postgres` 已是侧车插件，未装即 `Driver not found`） | `rds-driver --lib` **96 passed / 8 ignored**；`data_source_lifecycle` **30**、`ui_contract` **12**、`mock_generator` **10**、`zz_fixture_probe` MySQL/PG/SQLite/DuckDB 四夹具全连上；gate **workbench 44 targets / 408 passed / 0 failed**、**driver 1 / 96 / 0 / 8 ignored** | 完成（`1d2befab`） |
+
+> **环境故障留痕（2026-11-28，非代码）**：刀43 之后跑全量门控先报 `targets=0`（编译期 `os error 1455 页面文件太小`），改逐靶跑后 workbench/store 大面积红，报错统一为 `no such table: schema_version` / `no such table: editor_contexts`。最小化取证：①Rust 探针 `Connection::open` → `CREATE TABLE` → `sqlite_master`，`CREATE` 返回 Ok 但表为空、db **0 字节**（WAL / DELETE 两种模式一样）；②Python 在**同一目录**建库同样 0 字节，**同一份 Python 写 C 盘 → 8192 字节、表正常**；③普通文件写 D 盘 1MB 内容读回完全一致，`fsutil file createnew` 成功；④删除 `target\zz_*` 后 `Test-Path` 仍为 True。结论：当次 D 盘「普通文件写正常、SQLite 落盘不生效」，属文件系统层异常，与代码无关；磁盘为单块 477GB SSD、`Healthy/OK`、NTFS、剩 83GB，System 日志近 300 条无 Ntfs/disk 错误。用户处理后已恢复（同探针 D/C 均 8192 字节），刀44 的全量门控在恢复后跑出。**教训**：这类「大面积 sqlite 建表失败」不要当回归查，先做跨实现（Rust/Python）+ 跨盘（D/C）对照。
+
+**刀42 留下的红**（全部已销项：刀43 修第 1 条，刀44 修其余 3 条）
 - `editor_exec_real::the_editor_execution_port_runs_a_query_on_every_configured_database`：本地通道建 `TEMP TABLE` 成功，随后 `SELECT` 被**预检**拦成「表「rds_accel_vars」不存在：已挂载的源里都没有这张表」——预检不认本会话刚建的临时表；`check()` 只有 `Result<(), String>`，没有「警告不阻断」出口（与 30b 同一障碍）。**已由刀43 修掉**（见 §5 刀43：`local_tables_visible` 放行 + ⑤ 假设按真机改写）。
-- `data_source_lifecycle` / `ui_contract`：并行 analytics 线，不属本审计。
-- `zz_fixture_probe`：本地不入库探针（`ssl-mode` 参数不被识别），CI 无此文件。
+- `data_source_lifecycle` / `ui_contract`：并行 analytics 线，旧断言与新口径冲突（Secret 改为「按能力注册」）。**已由刀44 按新口径结清**（改名 `save_registers_secret_by_capability_not_by_switch` + 白名单补 `stale_publish_dialog`）。
+- `zz_fixture_probe`：本地不入库探针（`ssl-mode` 参数不被识别），CI 无此文件。**已由刀44 修驱动侧真缺陷**：`mysql_native` 剥掉 sqlx 专属 SSL 参数后重解析，夹具改用 `*_native`。
 
 
 **刀27 备注**
