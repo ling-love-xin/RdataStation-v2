@@ -14,6 +14,8 @@ use super::*;
 mod connection;
 mod edit_cmds;
 mod execute;
+// 执行计划回执的展平（审计 29b）：纯数据层，不含 UI
+mod plan;
 mod pump;
 mod row_ops;
 mod scan;

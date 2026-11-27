@@ -30,32 +30,40 @@ impl EditorHostPanel {
                 return;
             }
         };
-        let dialect = if self.channel().runs_locally() {
-            // 加速 / 联邦：语句（连带计划）都在 DuckDB 上跑，计划就该看 DuckDB 的
-            engine::sql::SqlDialect::Duckdb
+        // 加速 / 联邦：语句（连带计划）都在 DuckDB 上跑。这里要 **JSON** 形状——结果区回执处
+        // 据此展平成结构化计划表（`exec::plan`，审计 29b）；默认的框线图文本对用户没有意义。
+        // 源库档照旧按方言生成：DuckDB 的 JSON 选项在别的引擎上不成立。
+        let explain = if self.channel().runs_locally() {
+            let body = sql.trim().trim_end_matches(';').trim();
+            if body.is_empty() {
+                self.set_message(Some("没有可生成执行计划的语句".to_string()), cx);
+                return;
+            }
+            engine::ExplainAnalyzer::generate_explain_sql(body, Some("FORMAT JSON"))
         } else {
-            match self.source_dialect() {
+            let dialect = match self.source_dialect() {
                 Ok(dialect) => dialect,
                 Err(reason) => {
                     self.set_message(Some(reason), cx);
                     return;
                 }
-            }
-        };
-        let Some(explain) = engine::sql::explain_sql(dialect, &sql) else {
-            self.set_message(
-                Some(format!(
-                    "{} 暂不支持生成执行计划（要先改会话开关 / 再查计划视图）",
-                    translate::label_of(dialect)
-                )),
-                cx,
-            );
-            return;
+            };
+            let Some(explain) = engine::sql::explain_sql(dialect, &sql) else {
+                self.set_message(
+                    Some(format!(
+                        "{} 暂不支持生成执行计划（要先改会话开关 / 再查计划视图）",
+                        translate::label_of(dialect)
+                    )),
+                    cx,
+                );
+                return;
+            };
+            explain
         };
         if self.execute_labeled(
             ExecTarget::Statement(explain),
             ResultPlacement::NewSet,
-            Some("执行计划".to_string()),
+            Some(super::plan::EXPLAIN_TITLE.to_string()),
             cx,
         ) {
             self.set_message(Some("已提交执行计划（结果落新的结果集）".to_string()), cx);

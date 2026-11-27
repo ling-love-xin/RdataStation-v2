@@ -377,6 +377,9 @@ impl EditorHostPanel {
                     ));
                 }
             }
+            // 【29b】执行计划回执：本地通道发的是 `EXPLAIN (FORMAT JSON)`，两列原文在这里
+            // 展平成结构化计划表（对不上就原样放行，源库方言的文本计划不受影响）
+            super::plan::flatten_explain_result(&mut entry);
             self.shared
                 .update_results(|store| store.push(entry, placement, fact));
             // 【B4】分析触发的物化回执：常驻表名回挂**原槽位**（`source_fact_set`），

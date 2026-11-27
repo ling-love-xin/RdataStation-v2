@@ -13,7 +13,7 @@
 
 - 内核：三通道收口（`SessionHandle` 只剩「无会话 / 实例会话」两种），意图清单 replay、别名冲突即拒、引用计数拒绝 DETACH、发送前静态预检——设计、实现、测试三方对齐，K 系列 12 刀验收可逐条回查（`catalog-context-model.md` §9）。
 - 面板：行模型（身份 / 通道 / 寿命 / 状态 / 挂载三态 / 三段分组）、窄宽丢列与走马灯（实测常量 + headless 真排版断言）、事件路径取数 + 后台 introspect + 分页、约 19 个动作位、两种空态、状态栏读数——都在。
-- 短板：3 个**已实现未接线**的孤岛（legacy 联邦、`ExplainAnalyzer`、FTS，外加半途的 minicatalog）；**Oracle 打破了「源只读」不变量**而文档仍按全覆盖写；跨源**类型降级警告**自述「未做」；跨源真机测试**全部环境门控、未设即跳过**。
+- 短板：3 个**已实现未接线**的孤岛（legacy 联邦、`ExplainAnalyzer`、FTS，外加半途的 minicatalog）——其中 `ExplainAnalyzer` 已在刀36 接线；**Oracle 打破了「源只读」不变量**而文档仍按全覆盖写；跨源**类型降级警告**自述「未做」；跨源真机测试**全部环境门控、未设即跳过**。
 
 ### 成熟度评分（主观汇总，按证据完备度而非体验）
 
@@ -71,7 +71,7 @@
 | 扩展治理 | 闭环 | `extensions/{inventory 474, reconcile 247, verify 174}` + `extension/plugin.rs` 502 + `duckdb_extensions_probe`；面板「装扩展」按钮 `data_objects_tab.rs:1489` | — |
 | 安全面 | 闭环（有例外） | `services/policy_guard.rs` 721（editor 9 处引用）+ `refs.rs` 516 + `scrub_credentials`；`AccelSource` 手写 `Debug` 脱敏（`accel.rs:219-231`） | Oracle 例外见 P0-2 |
 | 查询缓存 | 接线 | `services/sql_service.rs:634` 用 `get_query_cache()`；`connection_manager.rs:9` 用 `CacheManager`；`database/navigator_service.rs:2318` 用 L1 | 无 UI 观测：`cache_dialog` 清的是磁盘元数据缓存，不是这套 |
-| EXPLAIN | 半闭环 | UI 有入口：`editor/src/view/host/exec/tx.rs:19 explain_current`，两条拒例测试（`editor/src/view/tests/format.rs:432/451`）；但 `duckdb/explain.rs:122 ExplainAnalyzer` 全仓无调用者 | 计划树解析 / 全表扫描判定 / 性能建议未接 UI |
+| EXPLAIN | 已闭环（刀36） | UI 入口 `editor/src/view/host/exec/tx.rs:19 explain_current`；本地通道改发 `EXPLAIN (FORMAT JSON)`，回执在 `exec/pump.rs` 处经 `exec/plan.rs` 展平成「层级 / 算子 / 对象 / 预估行数 / 下推 / 额外信息」六列表；源库方言的文本计划原样放行 | 计划树解析 / 外部源「投影已推 · 过滤未推」已进结果区；全表扫描判定与性能建议仍只有引擎侧 API，未在 UI 呈现 |
 | FTS | 孤岛 | `duckdb/search/fts.rs` 348 行，仅经 `duckdb/mod.rs:76-77` 的 `pub use search::*` 导出 | 零入口 |
 | minicatalog | 未完成 | `cache/minicatalogs.rs:103` TODO（等 JSON 定义），全仓无引用 | 未接线 |
 | legacy 联邦 | 死面 | `federation/legacy.rs:6` 自述「网络源拼 `ATTACH '<url>' AS 别名`，没有 `(READ_ONLY)`」；`FederationManager` 只有 `duckdb/mod.rs:64`、`lib.rs:87` 的 re-export + 自身测试 | 应删除（见 P0-1） |
@@ -161,10 +161,11 @@
 - 影响：源覆盖停在「MySQL / PG / SQLite / DuckDB 文件 + Oracle」，与「DataGrip 用表函数桥覆盖 JDBC 全名单」的差距主要在这里。
 - 验收（照 Oracle 模板，不动内核）：新增 `AccelKind::MsSql` + `ExtensionAbility::FederationMsSql` + Secret/URL 分支 + 一条真机探针；验收看 `accel.rs` 的能力矩阵、`registry` 的 attach 断言、`extensions` 的仓库/来源断言三处同时通过。
 
-**P1-5 `ExplainAnalyzer` 未接 UI**
-- 现状：`explain.rs` 494 行（`PlanNode` / `PlanNodeType` / 全表扫描判定 / 建议）零调用者；UI 侧只有 `explain_current` 发 `EXPLAIN` 并把文本贴出来。
+**P1-5 `ExplainAnalyzer` 未接 UI（刀36 已修）**
+- 原状：`explain.rs` 494 行（`PlanNode` / `PlanNodeType` / 全表扫描判定 / 建议）零调用者；UI 侧只有 `explain_current` 发 `EXPLAIN` 并把文本贴出来。
 - 影响：用户看不到「谓词到底推没推下去、扫了多少行」——这正是与 DataGrip `#filter` / DBeaver `join.transitive.predicates` 对比时我们最缺的可见性。
-- 验收：结果区「执行计划」页签接入 `ExplainAnalyzer` 解析，对每条联邦源标注「投影已推 / 过滤未推」；用例覆盖 `has_full_table_scan` 与「Oracle 过滤在扫描节点之上」两类计划。
+- 做法（刀36）：本地通道（加速 / 联邦）改发 `EXPLAIN (FORMAT JSON)`；回执落到 store 之前，`exec/plan.rs` 用 `parse_json_plan` 建树、`collect_source_scans` 取外部源事实，展平成六列表（`层级 / 算子 / 对象 / 预估行数 / 下推 / 额外信息`），缩进按层级递进。命中条件三重（标题是「执行计划」+ 结果值确实以 `[`/`{` 开头且含 `"name"` + 解析成功），任一不满足就原样放行——源库方言的文本 `EXPLAIN` / `EXPLAIN QUERY PLAN` 不受影响。改写时 `column_types` / `column_annotations` 置空 vec、`key_columns` 置 `None`，守住「空 vec = 没报」与「非空时等长」两条不变式。
+- 验收：3 条新用例（联邦扫描 + 扫描之上 `FILTER` → 「投影已推 · 过滤未推」落在扫描行；正文可从任一列找到、文本计划不被误判；整条回执在标题对/错两侧分别改写与原样保留）；`cargo test -p rds-editor --lib -j 1 -- --test-threads=1` **889 passed / 0 failed / 4 ignored**（基线 886 + 3）。
 
 **P1-6 FTS 孤岛 + minicatalog 未完成**
 - 现状：`search/fts.rs` 348 行仅 re-export；`minicatalogs.rs:103` TODO 且无引用。
@@ -230,7 +231,7 @@
 |---|---|---|---|
 | 1 | 删 `legacy` 死面 + 收 `pub use`（P0-1）**——已执行（刀27）** | `duckdb/federation/{legacy,mod}.rs`、`engine/src/lib.rs`、`duckdb/mod.rs` | `cargo check -p rds-engine` 通过；`cargo test -p rds-engine --lib` **345 passed / 0 failed**；`grep FederationManager` 在 `crates` 下清零 |
 | 2 | 文档按 Oracle 现实改写（P0-2）**——已执行（刀28）** | `docs/architecture/federation/catalog-context-model.md` §8 #5 / §11；`driver-capability-matrix.md` §1 / §4 | 逐条对照 `accel.rs:171-174`、`session.rs::l2_write_refusal`、`registry.rs:558-596`；文档内「一律只读」表述不再与实现冲突 |
-| 3 | 接 `ExplainAnalyzer` 进结果区（P1-5） | `crates/editor`（结果区）、`engine/duckdb/explain.rs` | 新用例：联邦源计划里「过滤在扫描节点之上」可被识别并渲染 |
+| 3 | 接 `ExplainAnalyzer` 进结果区（P1-5）**——已执行（刀36）** | `crates/editor/src/view/host/exec/{tx,pump,plan}.rs`；引擎侧 `duckdb/explain.rs` 复用 | 新用例：联邦源计划里「过滤在扫描节点之上」可被识别并渲染 |
 | 4 | 跨源类型降级提示（P0-3）**——部分执行（刀30）** | `engine/services/duckdb_service.rs`；预检侧列类型对照记 30b | Decimal256 直灌从「报错」改为「Arrow 层 cast 成 DOUBLE + 带列名的降级说明」（两条单测）；「同名列 join 给提示」需先补列类型事实，未做 |
 | 5 | 真机门控脚本（§5）**——已执行（刀31）** | `tools/real-db-gate.ps1` + `.rds/tmp/` 日志 | 五变量、三包逐包跑、日志按包落盘并汇总；engine 实测 `21 targets / 414 passed / 0 failed`（5 个门控变量未设 → 结论行明示「跨源未验证」）。顺带修掉两条阻塞级测试债（刀32 断言错、刀33 用例抢 `rds_src`） |
 
@@ -280,6 +281,8 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 | 刀33 | 2026-11-27 | `tests/analysis_kernel_probe.rs`：新增 `clean_accel_slate()`——进程级互斥锁 + 逐条 `unmount_conn` 清 `accel:*` 残留；加速档 4 条用例开头持锁 | 该 target 并行（默认线程数）**6 passed / 0 failed**，串行同；engine 全量 `--tests --no-fail-fast -- --test-threads=1` **21 targets / 414 passed / 0 failed** | 完成（P1-9 关闭） |
 
 | 刀34 | 2026-11-27 | 本地探针 `crates/workbench/tests/zz_fixture_probe.rs`：删掉 `ConnectRequest { use_duckdb_fed: Some(false) }` 一行（K4c 删字段时没跟着改，`error[E0560]`）。注意该文件被 `.gitignore:51 **/tests/zz_*.rs` 挡住、**不入库**，所以这一改只落在工作区，不产生代码提交 | `cargo test -p rds-workbench --tests -j 1 --no-run` → **Finished 6m20s**。随后该包因并行改动 `analytics_resource/service/table_asset.rs` 未闭合分隔符再次编译失败，与本审计无关 | 完成（本地环境） |
+
+| 刀36 | 2026-11-27 | 29b：`exec/tx.rs` 的本地通道（加速 / 联邦）改发 `EXPLAIN (FORMAT JSON)`（源库档仍按方言）；新增 `exec/plan.rs`——`explain_json_payload` 从两列回执抓计划正文，`plan_table` 用 `parse_json_plan` + `collect_source_scans` 先序展平成六列表（`层级 / 算子 / 对象 / 预估行数 / 下推 / 额外信息`），`flatten_explain_result` 在 `pump.rs` 的 `store.push` 之前改写，并把 `column_types` / `column_annotations` 置空、`key_columns` 清 `None`；标题常量 `EXPLAIN_TITLE` 与 `tx.rs` 同源 | `cargo check -p rds-editor -j 1` Finished 40.32s；新增 3 条用例全绿；`cargo test -p rds-editor --lib -j 1 -- --test-threads=1` **889 passed / 0 failed / 4 ignored** | 完成（P1-5 关闭） |
 
 **刀27 备注**
 
