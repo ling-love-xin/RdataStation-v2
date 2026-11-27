@@ -12,10 +12,10 @@ impl EngineQueryRunner {
 
     /// 组装本次联邦的源清单（**宿主组装**：引擎不读连接库、也不解密口令）
     ///
-    /// 判据**三源合一**（2026-11-27 用户拍板）：`use_duckdb_fed == Some(true)`（明确开了本地加速）
-    /// ∪ 项目登记过（`analysis_sources` 有这一行）∪ 本文档绑定的连接（单源联邦的主源）。
-    /// 三者任一成立即算源；`None`（驱动不支持直连）不算。**没有原生驱动的库**
-    /// （Oracle 这类）正是靠这条进联邦：应用连不上它，但 DuckDB 扫描器能。
+    /// 判据**两源合一**（2026-11-27 解耦 `use_duckdb_fed` 后）：项目登记过
+    /// （`analysis_sources` 有这一行，任意档）∪ 本文档绑定的连接（单源联邦的主源）。
+    /// 二者任一成立即算源——**连接记录上已经没有开关可看**，「能力」另由驱动常量判。
+    /// **没有原生驱动的库**（Oracle 这类）正是靠这条进联邦：应用连不上它，但 DuckDB 扫描器能。
     ///
     /// 两个来源，同一套判据：
     ///
@@ -59,17 +59,11 @@ impl EngineQueryRunner {
 
         // ② 运行态连接（含项目作用域；记录里没有的补上）
         let infos = self.runtime.block_on(manager.get_all_connection_info());
-        // 运行态连接按同一「三源合一」判据补进清单（与 `records(Some(doc_conn))` 同一套）：
-        // ① 明确开了本地加速 ② 项目登记过 ③ 本文档绑定（单源主源）；`None` 进不了 DuckDB。
+        // 运行态连接按同一「两源合一」判据补进清单（与 `records(Some(doc_conn))` 同一套）：
+        // ① 项目登记过 ② 本文档绑定（单源主源）。
         for info in infos.iter() {
-            if info.use_duckdb_fed.is_none() {
-                continue;
-            }
             let is_focus = info.id == doc_conn;
-            if info.use_duckdb_fed != Some(true)
-                && !engine::persistence::analysis_sources::is_registered(&info.id)
-                && !is_focus
-            {
+            if !engine::persistence::analysis_sources::is_registered(&info.id) && !is_focus {
                 continue;
             }
             if records.iter().any(|record| record.conn_id == info.id) {

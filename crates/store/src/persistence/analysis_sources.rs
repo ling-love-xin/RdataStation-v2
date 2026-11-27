@@ -196,6 +196,15 @@ impl AnalysisMountKind {
         }
     }
 
+    /// 给人看的档位名（门控原因、面板文案用；库里仍存 [`Self::as_db_str`]）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Federation => "联邦源",
+            Self::Accel => "本地加速",
+            Self::AttachFile => "文件库",
+        }
+    }
+
     /// 别名对本档是不是**自由**的：加速档的 ATTACH 别名是 `accel::SOURCE_ALIAS`（`rds_src`），
     /// 登记里的 `alias` 对它只是期望名/展示名。界面上要据此决定「能不能改名」。
     pub fn alias_is_free(self) -> bool {

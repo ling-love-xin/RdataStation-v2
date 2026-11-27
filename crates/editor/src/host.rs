@@ -133,13 +133,12 @@ pub trait EditorHost: 'static {
 pub trait FederatedSourcePort: Send + Sync + 'static {
     /// 可作联邦源的连接清单（宿主组装连接串）。
     ///
-    /// 判据**三源合一**（2026-11-27 用户拍板）——任一成立即算源：
+    /// 判据**两源合一**（2026-11-27 起连接记录上没有开关字段了）——任一成立即算源：
     ///
-    /// 1. `use_duckdb_fed == Some(true)`：用户明确开了「DuckDB 直连（本地加速）」；
-    /// 2. 项目登记过（`analysis_sources` 里有这一行 = **项目级意图**，`is_registered`）；
-    /// 3. `focus` 指定的连接（本文档绑定的那条：单源联邦的主源，即使没登记也必须进）。
+    /// 1. 项目登记过（`analysis_sources` 里有这一行 = **项目级意图**，`is_registered`）；
+    /// 2. `focus` 指定的连接（本文档绑定的那条：单源联邦的主源，即使没登记也必须进）。
     ///
-    /// `use_duckdb_fed == None`（驱动不支持直连）一律不算。
+    /// 驱动能不能挂不在这里判：由 `accel::AccelKind::from_db_type` 回答（`records` 里过滤）。
     fn records(&self, focus: Option<&str>) -> Vec<FederatedSourceRecord>;
 
     /// 把「主源」记成**项目意图**（写项目库的 `analysis_primary`，036）。
