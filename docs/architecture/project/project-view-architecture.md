@@ -259,3 +259,5 @@ cargo clippy -p rds-project --all-targets -j 1 # 2026-11-22 实测 2 条，见�
 | `too_many_arguments`（8/7） | `ui.rs::dialog_footer_three` | 参数是「三个按钮的 id / 文案 / 回调」的平行三元组，抽结构体只是把参数搬进字段，对读者没有增益；函数体只有一处 `DialogFooter` 组装 |
 
 注意：`cargo test --workspace` **必须带 `-j 2`**（并行链接重型 crate 会耗尽内存（DuckDB 已改动态链接），见 `.cargo/config.toml` 的 `test-all` 别名）。
+
+窗口用例在**默认并行**下会互相锁死：2026-11-27 实测 `cargo test -p rds-workbench --lib` 跑到 `quick_open::tests::palette::*` / `host::opening_the_palette_loads_scratchpad_files` 全部「running for over 60 seconds」且永不返回；同一批用例加 `--test-threads=1` 串行后 0.54s 全过。整套口径（同次实测）：227 条 = 210（`-- --skip quick_open`）+ 17（`quick_open -- --test-threads=1`），全绿。
