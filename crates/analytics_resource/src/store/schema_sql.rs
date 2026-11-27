@@ -39,7 +39,9 @@ pub(crate) const PROJECT_MIGRATIONS_SQL: &str = concat!(
     "\n",
     include_str!("../../../store/migrations/project_meta/036_file_asset_cas.sql"),
     "\n",
-    include_str!("../../../store/migrations/project_meta/037_checkout_lease_global_scope.sql")
+    include_str!("../../../store/migrations/project_meta/037_checkout_lease_global_scope.sql"),
+    "\n",
+    include_str!("../../../store/migrations/project_meta/038_table_asset_snapshots.sql")
 );
 
 /// 全局库：全局镜像表与版本表、分发回执、表型本体列、kind 归一。
@@ -59,5 +61,7 @@ pub(crate) const GLOBAL_MIGRATIONS_SQL: &str = concat!(
     "\n",
     include_str!("../../../store/migrations/global/038_analytics_global_refs.sql"),
     "\n",
-    include_str!("../../../store/migrations/global/040_global_file_asset_cas.sql")
+    include_str!("../../../store/migrations/global/040_global_file_asset_cas.sql"),
+    "\n",
+    include_str!("../../../store/migrations/global/041_table_asset_snapshots.sql")
 );
