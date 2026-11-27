@@ -249,6 +249,8 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 | 刀27 | 2026-11-27 | 删 `duckdb/federation/legacy.rs`（529 行）；收 `duckdb/mod.rs` 与 `engine/src/lib.rs` 的 `pub use`（`DataSourceConfig` / `DataSourceType` / `FederationManager`）；`federation/mod.rs` 的「一律只读」硬约束补 Oracle 例外（对齐 `accel.rs:171-174`、`session.rs::l2_write_refusal`） | `cargo fmt -p rds-engine -- --check` 对本刀触及的行无差异（包内既有差异见下）；`cargo check -p rds-engine -j 1` Finished 1m16s；`cargo test -p rds-engine --lib -j 1` **345 passed / 0 failed**（41.08s） | 完成 |
 | 刀28 | 2026-11-27 | 文档对账：`catalog-context-model.md` §8 #5（源只读加 L2 Oracle 例外）、§11②③（L1 强制 / Oracle 已落地 / 只剩 MSSQL 驱动形态未定）、§12 变更记录；`driver-capability-matrix.md` §1 联邦行写操作列、§4 联邦硬约束段；顺手删 §4 表里重复的一条 SQLite 行 | 文档内「一律只读」表述与 `accel.rs:171-174`、`session.rs::l2_write_refusal`、`registry.rs:558-596` 三处对上；纯文档，无编译面 | 完成 |
 
+| 刀29 | 2026-11-27 | 重写 `duckdb/explain.rs`：计划解析改走 `EXPLAIN (FORMAT JSON)`（DuckDB 默认 `EXPLAIN` 是框线图，原实现按行缩进建树且只在栈空时入栈、栈长恒 ≤1，除根外全部平铺；还误把第 0 列 `explain_key` 当计划正文）；`PlanNode` 增 `operator` / `extra_info`；新增 `SourceScanFacts` + `collect_source_scans` 判「投影已推 / 过滤未推」；外部源算子不再计入 `has_full_table_scan`；`duckdb/mod.rs`、`engine/src/lib.rs` 导出新类型 | `cargo check -p rds-engine` 通过；`cargo test -p rds-engine --lib` **353 passed**（explain 单测 11 → 18，含真实 DuckDB 链路与 L1/Oracle 台账等价形状） | 完成（引擎侧）；结果区接入记 29b（`explain_current` 走异步执行通道，需先摸清结果集注入） |
+
 **刀27 备注**
 
 - 删除 `legacy` 自带的 11 条用例，故验收基线是 `345 = 356 − 11`，不是「356 不掉」。
