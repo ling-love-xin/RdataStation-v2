@@ -166,6 +166,50 @@ async fn t208_structured_file_with_manifest_still_checks_bytes() {
 }
 
 #[tokio::test]
+async fn t205_adopt_file_refuses_a_display_name_already_alive() {
+    let (service, dir) = test_env().await;
+    let repair = IndexRepair::new(service.payload(), service.store());
+
+    // 已有一条存活资产占着显示名「dau」，但它登记的是另一个本体路径。
+    let seed = dir.join("seed.sql");
+    fs::write(&seed, b"select 1;").await.expect("write seed");
+    let mut existing = request(&seed, "reports/existing.sql");
+    existing.name = "dau".to_string();
+    service.archive(existing).await.expect("archive existing");
+
+    let stray = service
+        .payload()
+        .resources_dir()
+        .join("reports")
+        .join("dau.sql");
+    fs::create_dir_all(stray.parent().expect("parent"))
+        .await
+        .expect("mkdir");
+    fs::write(&stray, b"select 2;").await.expect("write stray");
+
+    let error = repair
+        .adopt_file("reports/dau.sql", None, ArchiveKind::File)
+        .await
+        .expect_err("补登也要过显示名闸门");
+    assert!(
+        format!("{error}").contains("占用"),
+        "错误要说清显示名被谁占用：{error}"
+    );
+    assert_eq!(
+        service
+            .store()
+            .alive_by_name("dau")
+            .await
+            .expect("alive by name")
+            .len(),
+        1,
+        "补登失败不能写入第二条同名资产"
+    );
+
+    let _ = fs::remove_dir_all(&dir).await;
+}
+
+#[tokio::test]
 async fn t204_adopt_file_registers_and_clears_issue() {
     let (service, dir) = test_env().await;
     let repair = IndexRepair::new(service.payload(), service.store());

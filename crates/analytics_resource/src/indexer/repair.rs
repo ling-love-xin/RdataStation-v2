@@ -30,6 +30,17 @@ impl<'a> IndexRepair<'a> {
                 .map(|stem| stem.to_string_lossy().to_string())
                 .unwrap_or_else(|| rel_path.to_string())
         });
+        // 补登绕过 `archive_new`，也是显示名唯一必须收口的一处：同名存活资产
+        // 已经存在时，再补登一条会让列表出现两条无法区分的同名资产。
+        if let Some(holder) = self.store.alive_by_name(&display_name).await?.into_iter().next() {
+            return Err(repair_err(
+                "adopt_file",
+                &format!(
+                    "显示名「{display_name}」已被资产（id={}）占用；请换一个名字或先处理占用资产",
+                    holder.id
+                ),
+            ));
+        }
 
         self.store
             .insert_archive_with_event(
