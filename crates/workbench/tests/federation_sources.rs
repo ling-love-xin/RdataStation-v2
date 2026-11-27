@@ -1,8 +1,9 @@
 //! 联邦源的组装与跨源执行（真机）
 //!
-//! 验的是「L1 收尾」后的口径：**连接记录里开了「DuckDB 直连」的都可以当联邦源**，
-//! 不要求应用先建连（源是 DuckDB 自己 `ATTACH` 的）——这也正是没有原生驱动的库
+//! 验的是「L1 收尾」后的口径：**项目登记过的连接都可以当联邦源**
+//!（源是 DuckDB 自己 `ATTACH` 的），不要求应用先建连——这也正是没有原生驱动的库
 //! （Oracle 这类）能参与的前提（它单独在 `oracle_federation.rs` 里验，两个文件各自一份临时库）。
+//! 2026-11-27 起「能不能当源」只看登记（`analysis_sources`），连接记录上已没有开关字段。
 //!
 //! ```text
 //! RDS_TEST_MYSQL_URL='mysql://root:root@192.168.3.138:3306/mysql' \
@@ -49,12 +50,20 @@ fn base_dir() -> PathBuf {
         .clone()
 }
 
-/// 建一条**标记为联邦源**的连接记录
-fn marked(name: &str, db_type: &str, url: &str, fed: bool) -> DataSourceSaveInput {
+/// 建一条连接记录（**当源与否由项目登记决定**，2026-11-27 起连接上不再有开关字段）
+fn marked(name: &str, db_type: &str, url: &str) -> DataSourceSaveInput {
     let mut input = DataSourceSaveInput::new(name, db_type, url);
     input.scope = ConnectionScope::Global;
-    input.use_duckdb_fed = Some(fed);
     input
+}
+
+/// 把两条连接登记进临时项目（写 `analysis_sources` 并发布进程级别名快照）。
+fn register_sources(root: &std::path::Path, ids: &[(&str, &str)]) {
+    for (conn_id, name) in ids {
+        engine::analysis::registration::ensure_conn_registered(root, conn_id, name)
+            .expect("登记为项目源");
+    }
+    engine::persistence::analysis_sources::publish_project(root).expect("发布别名快照");
 }
 
 #[test]
@@ -80,7 +89,6 @@ fn marked_connections_become_federated_sources() {
                 "mysql_src",
                 "mysql_native",
                 &mysql_url.replace("mysql://", "mysql_native://"),
-                true,
             ),
             None,
         ))
@@ -91,11 +99,15 @@ fn marked_connections_become_federated_sources() {
                 "sqlite_src",
                 "sqlite",
                 &format!("sqlite://{sqlite_path}"),
-                true,
             ),
             None,
         ))
         .expect("保存 SQLite 连接");
+    // 当源是**项目意图**：两条都登记进临时项目（连接上已没有开关字段可写）。
+    register_sources(
+        &base_dir(),
+        &[(&mysql_id, "mysql_src"), (&sqlite_id, "sqlite_src")],
+    );
     assert!(
         !rt.block_on(
             engine::connection_manager::get_connection_manager().has_connection(&mysql_id)
@@ -183,17 +195,23 @@ fn marked_connections_become_federated_sources() {
     assert!(all.contains("2 个源"), "{all}");
     eprintln!("✅ 重挂：{one} · {all}");
 
-    // 撤掉 SQLite 的「DuckDB 直连」值（`Some(false)` → `None`）→ 只剩一个源；
-    // 单源照样联邦（2026-11-25 用户口径）：跑得通，结果区点名「只有一条源」
-    let mut no_direct = marked(
-        "sqlite_src",
-        "sqlite",
-        &format!("sqlite://{sqlite_path}"),
-        false,
-    );
-    no_direct.use_duckdb_fed = None;
-    rt.block_on(service.update(&sqlite_id, &no_direct, None))
-        .expect("撤掉直连值");
+    // 【K4c】撤源 = 删登记行（连接上已没有开关可翻）：源清单从 2 条回到 1 条
+    //（只剩本文档连接自己）；单源照样联邦（2026-11-25 用户口径）。
+    let root = base_dir();
+    {
+        let conn =
+            engine::persistence::analysis_sources::open_in_project(&root).expect("打开项目库");
+        let rows = engine::persistence::analysis_sources::list(&conn).expect("读登记");
+        let sqlite_row = rows
+            .iter()
+            .find(|row| row.connection_id.as_deref() == Some(sqlite_id.as_str()))
+            .expect("sqlite 应已登记")
+            .id
+            .clone();
+        engine::persistence::analysis_sources::delete(&conn, &sqlite_row).expect("撤 sqlite 登记");
+    }
+    engine::persistence::analysis_sources::publish_project(&root).expect("重发别名快照");
+
     let single = runner
         .run(
             "federation_sources",
@@ -210,33 +228,4 @@ fn marked_connections_become_federated_sources() {
         .expect("单源联邦该照跑");
     assert_eq!(single.rows.len(), 1, "{:?}", single.rows);
     eprintln!("✅ 单源联邦照跑：{} 行", single.rows[0][0]);
-
-    // 再把 MySQL 的直连值也撤成 `None` → 一条源都不剩：入口就拒，且说清还差什么
-    let mut mysql_none = marked(
-        "mysql_src",
-        "mysql_native",
-        &mysql_url.replace("mysql://", "mysql_native://"),
-        true,
-    );
-    mysql_none.use_duckdb_fed = None;
-    rt.block_on(service.update(&mysql_id, &mysql_none, None))
-        .expect("撤 MySQL 直连值");
-    let error = runner
-        .run(
-            "federation_sources",
-            Some(&mysql_id),
-            None,
-            ExecChannel::Federated,
-            "SELECT 1",
-            RunOptions {
-                use_transaction: false,
-                lineage: None,
-                dml_confirmed: false,
-            },
-        )
-        .expect_err("没有源该拒");
-    assert!(error.contains("联邦源"), "{error}");
-    eprintln!("✅ 一条源都没有时如实拒绝：{error}");
-
-    let _ = sqlite_id;
 }

@@ -36,7 +36,6 @@ struct SeedConn {
     password: Option<&'static str>,
     description: &'static str,
     tags: &'static str,
-    use_duckdb_fed: Option<bool>,
 }
 
 fn main() {
@@ -77,7 +76,6 @@ fn main() {
             password: None,
             description: "本地 DuckDB 文件，含 orders/customers 演示表",
             tags: "[\"demo\",\"local\"]",
-            use_duckdb_fed: Some(true),
         },
         SeedConn {
             id: "G_conn_seed_sqlite",
@@ -88,7 +86,6 @@ fn main() {
             password: None,
             description: "本地 SQLite 文件，含 orders 演示表",
             tags: "[\"demo\",\"local\"]",
-            use_duckdb_fed: None,
         },
         SeedConn {
             id: "G_conn_seed_pg_refused",
@@ -99,7 +96,6 @@ fn main() {
             password: None,
             description: "本机未监听 5432 时应报连接被拒",
             tags: "[\"test\",\"error\"]",
-            use_duckdb_fed: None,
         },
         SeedConn {
             id: "G_conn_seed_pg_badhost",
@@ -110,7 +106,6 @@ fn main() {
             password: None,
             description: "不可达地址，用于验证超时/网络错误提示",
             tags: "[\"test\",\"error\"]",
-            use_duckdb_fed: None,
         },
         SeedConn {
             id: "G_conn_seed_mysql_badport",
@@ -121,7 +116,6 @@ fn main() {
             password: Some("whatever"),
             description: "错误端口 13306，用于验证连接被拒",
             tags: "[\"test\",\"error\"]",
-            use_duckdb_fed: None,
         },
         SeedConn {
             id: "G_conn_seed_mysql_badpass",
@@ -132,7 +126,6 @@ fn main() {
             password: Some("definitely_wrong"),
             description: "本机 MySQL 在线时应报认证失败",
             tags: "[\"test\",\"error\"]",
-            use_duckdb_fed: None,
         },
         SeedConn {
             id: "G_conn_seed_duckdb_missing",
@@ -143,7 +136,6 @@ fn main() {
             password: None,
             description: "指向不存在的文件，用于验证打开失败提示",
             tags: "[\"test\",\"error\"]",
-            use_duckdb_fed: None,
         },
     ];
 
@@ -182,7 +174,6 @@ fn main() {
                 options: None,
                 driver_properties: None,
                 advanced_options: None,
-                use_duckdb_fed: c.use_duckdb_fed,
                 metadata_path: None,
                 schema_name: None,
                 // 演示种子按生产默认口径保存凭据（对齐 data_source_service 的 unwrap_or(true)）。
@@ -288,7 +279,6 @@ fn seed_project(rt: &tokio::runtime::Runtime, root: &Path, sqlite_path: &Path) {
                 password_encrypted: None,
                 options: None,
                 tags: Some("[\"project\"]".to_string()),
-                use_duckdb_fed: None,
                 metadata_path: None,
                 is_active: true,
                 server_version: None,
@@ -315,7 +305,6 @@ fn seed_project(rt: &tokio::runtime::Runtime, root: &Path, sqlite_path: &Path) {
                 password_encrypted: None,
                 options: None,
                 tags: Some("[\"project\",\"local\"]".to_string()),
-                use_duckdb_fed: None,
                 metadata_path: None,
                 is_active: true,
                 server_version: None,
@@ -347,7 +336,6 @@ fn seed_project(rt: &tokio::runtime::Runtime, root: &Path, sqlite_path: &Path) {
                 password_encrypted: None,
                 options: None,
                 tags: Some("[\"shared\"]".to_string()),
-                use_duckdb_fed: Some(true),
                 metadata_path: None,
                 is_active: true,
                 server_version: None,

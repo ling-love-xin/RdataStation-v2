@@ -93,7 +93,6 @@ async fn failed_database_handshake_releases_tunnel() {
         tags: None,
         metadata_path: None,
         schema_name: None,
-        use_duckdb_fed: None,
         password: None,
         skip_persistence: Some(true),
         network_method: Some(ConnectionMethod::HttpProxy(ProxyConfig {

@@ -208,9 +208,12 @@ impl Render for EditorPanel {
         // Round 25：分析库元数据树按需后台加载（同样必须在 `let theme = cx.theme()` 之前：
         // theme 借了 `cx`，之后再要 `&mut Context` 会 E0502）。
         if let Some(item) = self.shared.selected_connection() {
-            if item.use_duckdb_fed == Some(true)
-                && self.nav_for.borrow().as_deref() != Some(item.id.as_str())
-            {
+            // 只有**登记成本地加速**的连接才有分析库副本可看（2026-11-27 起看登记，不看连接开关）
+            let accel_registered = matches!(
+                engine::persistence::analysis_sources::mount_kind_for_connection(&item.id),
+                Some(engine::persistence::analysis_sources::AnalysisMountKind::Accel)
+            );
+            if accel_registered && self.nav_for.borrow().as_deref() != Some(item.id.as_str()) {
                 self.ensure_analysis_tree(item.id.clone(), cx);
             }
         }
@@ -281,13 +284,18 @@ impl Render for EditorPanel {
                     item.schema.clone().unwrap_or_else(|| "-".to_string()),
                 ),
                 (
-                    "DuckDB 联邦",
-                    if item.use_duckdb_fed == Some(true) {
-                        "开启（本地加速）".to_string()
-                    } else if item.use_duckdb_fed.is_some() {
-                        "关闭（可直连，未加速）".to_string()
-                    } else {
-                        "不支持（不可被 DuckDB 直连）".to_string()
+                    "分析源",
+                    match engine::persistence::analysis_sources::mount_kind_for_connection(
+                        &item.id,
+                    ) {
+                        Some(kind) => format!("已登记：{}", kind.label()),
+                        None => {
+                            if engine::duckdb::accel::AccelKind::from_db_type(&item.driver).is_ok() {
+                                "未登记（在数据面板里挂上即可）".to_string()
+                            } else {
+                                "不支持（这个驱动挂不进 DuckDB）".to_string()
+                            }
+                        }
                     },
                 ),
                 (
@@ -387,7 +395,11 @@ impl Render for EditorPanel {
 
         // Round 25：数据库导航区——分析库元数据树由上文按需后台加载，这里只读缓存。
         if let Some(item) = self.shared.selected_connection() {
-            if item.use_duckdb_fed == Some(true) {
+            // 分析库导航只在**登记成本地加速**时才有内容（与上面的预取同一判据）
+            if matches!(
+                engine::persistence::analysis_sources::mount_kind_for_connection(&item.id),
+                Some(engine::persistence::analysis_sources::AnalysisMountKind::Accel)
+            ) {
                 let nav = self.nav_tables.borrow();
                 let mut nav_content = div().v_flex().gap_1().mt_1p5();
                 if nav.is_empty() {

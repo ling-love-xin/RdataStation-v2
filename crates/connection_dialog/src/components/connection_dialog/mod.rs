@@ -478,7 +478,6 @@ pub struct ConnectionDialogState<H: 'static> {
     pub network_ref: Entity<SelectState<SearchableVec<SharedString>>>,
     pub auth_list: Rc<RefCell<Vec<AuthConfig>>>,
     pub network_list: Rc<RefCell<Vec<NetworkConfig>>>,
-    pub duckdb_fed: Rc<Cell<bool>>,
     /// 「保存凭据」开关（P0-4，2026-10-24）：`false` = 密码不落库（仅会话可用）。
     pub save_credentials: Rc<Cell<bool>>,
     /// 「显示系统对象」开关（P1 导航设置，2026-10-25）：`true` = 导航树不隐藏系统 catalog/schema。

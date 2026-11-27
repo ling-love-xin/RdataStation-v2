@@ -1354,7 +1354,6 @@ mod tests {
             database: None,
             schema: None,
             description: None,
-            use_duckdb_fed: None,
             environment: None,
             created_at: String::new(),
             updated_at: String::new(),

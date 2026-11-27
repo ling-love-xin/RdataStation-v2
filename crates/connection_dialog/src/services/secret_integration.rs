@@ -247,22 +247,20 @@ pub fn analysis_db_for_scope(
     }
 }
 
-/// 门控注册（**统一入口**）：加速开 + 有对应扩展才注册，项目 / 全局同规则。
+/// 门控注册（**统一入口**）：有对应 DuckDB 扩展才注册，项目 / 全局同规则。
 ///
-/// 规则（2026-10-03 用户拍板，替代 §14 #38 旧"按 use_duckdb_fed 单条件"）：
-/// 1. **默认不注册**——`use_duckdb_fed` 未开 → 直接返回（无论项目还是全局）；
-/// 2. **无对应 DuckDB 扩展 → 不注册**（duckdb 文件源 / 未知类型，即使加速开）；
+/// 规则（2026-11-27 解耦 `use_duckdb_fed` 后）：
+/// 1. **能力判据**：驱动有没有对应 DuckDB 扩展（[`has_federable_extension`]）——
+///    它代替了原来「开关是否打开」这一条；
+/// 2. **要不要用它当源**是另一件事，看项目意图清单（`analysis_sources`），与 Secret 无关
+///    （Secret 只是内存凭据，注册了不挂也无副作用）；
 /// 3. `target` 由调用方按作用域传入（[`analysis_db_for_scope`]），失败仅告警不影响连接。
 pub fn ensure_secret_registered_gated(
     target: Option<&std::path::Path>,
     conn_id: &str,
     db_type: &str,
     url: &str,
-    use_duckdb_fed: Option<bool>,
 ) {
-    if use_duckdb_fed != Some(true) {
-        return; // 默认不注册（加速关；`None` = 不可直连，更不注册）
-    }
     if !has_federable_extension(db_type) {
         tracing::info!(
             "[secret] 连接 {}（{db_type}）无对应 DuckDB 扩展，跳过 Secret 注册",

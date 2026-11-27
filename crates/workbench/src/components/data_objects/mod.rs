@@ -475,19 +475,14 @@ pub struct ConnRow {
     ///
     /// 两类源行靠它分流（铁律第 42 条）：能力者行尾给「挂载 / 卸载」一个动作位；
     /// 无能力且已登记的只给小标「已登记」，**不给挂载**（永远挂不上）。
-    /// 判据统一走 `AccelKind::from_db_type`，与连接对话框的开关门控同源。
+    /// 判据统一走 `AccelKind::from_db_type`（2026-11-27 起这也是「能不能做源」的唯一判据，
+    /// 连接记录上不再有 `use_duckdb_fed` 开关）。
     pub attach_capable: bool,
-    /// **能不能被 DuckDB 直连**（= `use_duckdb_fed` 三态里有值）。
-    ///
-    /// 源行行尾那颗「挂载 / 卸载」的判据是「驱动能挂」+「这条连接能用 DuckDB 连」
-    /// （`attach_capable && fed_enabled`），**不是**登记。「有值即登记」之后两者通常一致，
-    /// 但登记写库失败时（`set_use_duckdb_fed` 只 `warn!`、不回滚开关）这一行仍然要能挂——
-    /// 否则它会既出不了入口、也无处补救。
-    pub fed_enabled: bool,
     /// 登记状态 = 项目库 `analysis_sources` 里有这一条（「项目级意图」）。
     ///
-    /// **只认这一份**：`use_duckdb_fed` 是"能力/加速开关"，不是"我要注册这个源"
-    /// （2026-11-25 用户口径）。登记了但连接不在清单里的，走 `reg:<id>` 行。
+    /// **只认这一份**：能不能做源看驱动（[`Self::attach_capable`]），
+    /// 要不要用它当源只看这里的登记行（2026-11-27 解耦后连接记录上没有开关字段）。
+    /// 登记了但连接不在清单里的，走 `reg:<id>` 行。
     pub registered: bool,
 }
 
@@ -535,7 +530,7 @@ pub struct Collected {
     /// 项目库 `analysis_sources` 的登记行（源段的「意图侧」）。
     ///
     /// 只存**项目级**意图；会话级加源不写库（切项目即清，写进去只会留假记录）。
-    /// 老连接（只有 `use_duckdb_fed` 标记、还没写进新表）由 [`ConnRow::registered`] 兜着。
+    /// 登记行是「要不要用它当源」的唯一持久状态（2026-11-27 起不再有连接开关兜底）。
     pub registered_sources: Vec<engine::persistence::analysis_sources::AnalysisSourceRow>,
     /// 被用户"卸掉"的底座别名（`analytics` / `rds_global`；见 `AnalysisInstance::hidden_bases`）。
     ///
@@ -694,7 +689,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
     // 2026-11-26 更正过：判据 `mounted_conns()`，旧口径「不算已挂载」已废止。
     // 不写的话用户点了「挂载」，行还写着「未挂载」，只能再点一次。
 
-    // 源段的一级行 = 一条**已注册成分析源**的连接（`use_duckdb_fed`，零 I/O）。
+    // 源段的一级行 = 一条**已注册成分析源**的连接（项目登记行，零 I/O）。
     // 表清单不在这里——展开某个连接时才 introspect（面板 `load_source_children`），
     // 打开面板就查所有连接是不可接受的（N 个连接 × 3 层同步查询）。
     //
@@ -828,12 +823,10 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             // 挂不上（没有 ATTACH 能力）但已登记、且这条连接活着：展开 = 去它身上选表
             expand_via: (!conn.attach_capable && conn.registered && conn.connected)
                 .then(|| ExpandVia::Picker { conn_id: conn.id.clone() }),
-            source_action: (conn.attach_capable && conn.fed_enabled).then(|| {
-                SourceAction::ToggleMount {
-                    conn_id: conn.id.clone(),
-                    path: file_path.clone(),
-                    mounted,
-                }
+            source_action: conn.attach_capable.then(|| SourceAction::ToggleMount {
+                conn_id: conn.id.clone(),
+                path: file_path.clone(),
+                mounted,
             }),
         });
     }
@@ -1260,7 +1253,7 @@ pub fn session_actions(key: &str, state: &State) -> Vec<SessionAction> {
 /// 可展开的源行只有三类：联邦源（`session:{owner}:{alias}`）、数据库文件（`fileview:{alias}`）、
 /// 源库连接（`conn:{conn_id}`）；其它 key 一律 `None`——表 / 文件 / 资产行没有下一层。
 ///
-/// 本地加速**没有**自己的源行：它是执行通道（`use_duckdb_fed = true` 时那条连接走加速），
+/// 本地加速**没有**自己的源行：它是执行通道（登记成 `Accel` 时那条连接走加速），
 /// 不占源段，所以也不需要 `accel:` 这种 key。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceRef {
@@ -1696,18 +1689,20 @@ pub fn collect(shared: &Shared) -> Collected {
         .filter_map(|row| row.connection_id.as_deref())
         .collect();
 
-    // 源段收两类连接（铁律第 42 条末段 / 2026-11-25 用户口径）：
-    // 1. `use_duckdb_fed` 有值 = 有 ATTACH 能力且已声明当 DuckDB 源 → **必须出**；
-    // 2. 开关为空（没有 ATTACH 能力）但**已进项目分析源表** → 也出（小标「已登记」，
-    //    不给挂载，只在导航里是活连接时可展开选表）。
+    // 源段收两类连接（铁律第 42 条末段 / 2026-11-27 解耦后）：
+    // 1. 驱动有 ATTACH 能力（`AccelKind::from_db_type` 认得出）→ **必须出**（能挂就给挂载位）；
+    // 2. 没有 ATTACH 能力但**已进项目分析源表** → 也出（小标「已登记」，不给挂载，
+    //    只在导航里是活连接时可展开选表）。
     // 其余一律不进：源段不做探索搜查（"可挂但没挂也没登记"的走「增源」进来）。
     let connections: Vec<ConnRow> = shared
         .connections
         .borrow()
         .iter()
-        // 源段出行按三态：`use_duckdb_fed` **有值**（true/false）= 能被 DuckDB 直连，必须出；
-        // `None` = 不可直连，只有已登记（历史遗留）才兜底出行。
-        .filter(|item| item.use_duckdb_fed.is_some() || registered_conn_ids.iter().any(|id| *id == item.id))
+        // 出行按「能力 ∪ 登记」：能力是驱动给的，登记是项目意图给的，两处都不看连接开关
+        .filter(|item| {
+            engine::duckdb::accel::AccelKind::from_db_type(&item.driver).is_ok()
+                || registered_conn_ids.iter().any(|id| *id == item.id)
+        })
         .map(|item| ConnRow {
             id: item.id.clone(),
             name: item.name.clone(),
@@ -1722,10 +1717,7 @@ pub fn collect(shared: &Shared) -> Collected {
             // 这里手上有的是驱动 id（`mysql_native` / `postgres` / `sqlite` / `duckdb` / `oracle`），
             // 它按前缀认驱动，与 `db_type` 同一套规则
             attach_capable: engine::duckdb::accel::AccelKind::from_db_type(&item.driver).is_ok(),
-            // 「这条连接能不能被 DuckDB 连」就是三态有没有值（`Some(_)`），与驱动能力分开记：
-            // 能力是驱动给的，值是用户给的（`set_use_duckdb_fed`）
-            fed_enabled: item.use_duckdb_fed.is_some(),
-            // 登记只认项目库那一行：`use_duckdb_fed` 是能力/加速开关，**不是**选表的意图
+            // 登记只认项目库那一行——这是「要不要拿它当源」的唯一持久判据
             registered: registered_conn_ids.iter().any(|id| *id == item.id),
         })
         .collect();
@@ -1870,7 +1862,6 @@ mod tests {
                 driver: "mysql".into(),
                 database: Some("orders".into()),
                 attach_capable: true,
-                fed_enabled: true,
                 registered: true,
             }],
             analysis_tables: vec!["res_订单明细_20261115103000".into(), "数据修复".into()],
@@ -2767,22 +2758,22 @@ mod tests {
         assert!(conn.source_action.is_none(), "挂不上的连接不能给挂载按钮");
     }
 
-    /// 「能用 DuckDB 连、但没登记」（登记写库失败那一种）仍要有挂载入口。
+    /// 「驱动能挂、但还没登记」：挂载入口照样要有——那颗按钮正是去登记的路。
     ///
-    /// 判据是能力 + 三态有值，不是登记：`set_use_duckdb_fed` 落库失败只 `warn!`、
-    /// 不回滚开关；若按钮跟着登记走，这一行就既没有入口、也没有补救的路。
+    /// 判据只有能力（`attach_capable`）：登记是意图，不是入场券；把按钮绑到登记上，
+    /// 这一行就既没有入口、也没有补救的路（2026-11-27 解耦后没有连接开关可兜底）。
     #[test]
-    fn fed_enabled_connection_keeps_the_mount_button_without_registration() {
+    fn an_attachable_connection_keeps_the_mount_button_without_registration() {
         let mut c = sample();
         c.registered_sources.clear();
-        assert!(c.connections[0].fed_enabled, "sample 的连接三态有值");
+        assert!(c.connections[0].attach_capable, "sample 的驱动能挂");
         let conn = objects(&c)
             .into_iter()
             .find(|o| o.key == "conn:C_mysql_9")
             .expect("连接行要在");
         assert!(
             matches!(conn.source_action, Some(super::SourceAction::ToggleMount { .. })),
-            "能连就能挂：登记缺一行不该把入口一起摘掉"
+            "能挂就能给入口：登记缺一行不该把入口一起摘掉"
         );
     }
 
@@ -2889,7 +2880,6 @@ mod tests {
             driver: "postgres".into(),
             database: Some("dw".into()),
             attach_capable: true,
-            fed_enabled: true,
             registered: true,
         });
         let rows = objects(&offline);
@@ -3177,7 +3167,6 @@ mod temp_source_tests {
             driver: "duckdb".into(),
             database: Some("D:/data/销售.duckdb".into()),
             attach_capable: true,
-            fed_enabled: true,
             registered: true,
         });
         let row = objects(&c)

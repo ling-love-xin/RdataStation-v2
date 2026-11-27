@@ -429,8 +429,8 @@ impl DataObjectsTab {
 
     /// 展开 / 收起一个源行（联邦源与本地加速源可展开，其余行没有下一层）。
     ///
-    /// `expand_via` 有值 = 这一行**没有自家挂载的表可列**：它是登记过、但挂不进联邦的
-    /// 连接（`use_duckdb_fed` 开着却拿不到 ATTACH 能力）。展开改成在这条活连接上
+    /// `expand_via` 有值 = 这一行**没有自家挂载的表可列**：它是登记过、但驱动挂不进联邦的
+    /// 连接（`attach_capable == false`，比如 ClickHouse 这类还没接入的驱动）。展开改成在这条活连接上
     /// 开「加源」选源器，用户在那里选表 → 载入临时表（`LoadScope::Session`），
     /// 走的是和导航栏同一份内省（`NavigatorService`），不是第二套取数。
     fn toggle_source_expand(

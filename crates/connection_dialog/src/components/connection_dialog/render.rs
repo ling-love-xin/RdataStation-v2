@@ -134,7 +134,6 @@ impl<H: 'static> ConnectionDialogState<H> {
         let network_ref = self.network_ref.clone();
         let auth_list = self.auth_list.clone();
         let network_list = self.network_list.clone();
-        let duckdb_fed = self.duckdb_fed.clone();
         let save_credentials = self.save_credentials.clone();
         let show_system_objects = self.show_system_objects.clone();
         let cache_path = self.cache_path.clone();
@@ -623,12 +622,10 @@ impl<H: 'static> ConnectionDialogState<H> {
                 1 => network_tab_ui(&network_ref, &shared, theme, cx),
                 4 => advanced_tab_ui(
                     AdvancedTab {
-                        driver: &driver,
                         env: &env,
                         env_list: &env_list,
                         env_policies: &env_policies,
                         overrides: &sec_overrides,
-                        duckdb_fed: &duckdb_fed,
                         show_system_objects: &show_system_objects,
                         cache_path: &cache_path,
                         state: &state,
@@ -812,7 +809,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
-                    duckdb_fed.clone(), save_credentials.clone(), show_system_objects.clone(),
+                    save_credentials.clone(), show_system_objects.clone(),
                     cache_path.clone(), props.clone(),
                     scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
                     ssl_cert.clone(), ssl_key.clone(), sec_overrides.clone(),
@@ -992,7 +989,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
-                    duckdb_fed.clone(), save_credentials.clone(), show_system_objects.clone(),
+                    save_credentials.clone(), show_system_objects.clone(),
                     cache_path.clone(), props.clone(),
                     scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
                     ssl_cert.clone(), ssl_key.clone(), sec_overrides.clone(),
@@ -2327,11 +2324,9 @@ fn network_tab_ui(
 /// 高级页所需输入。
 ///
 /// 这页依赖最多：环境下拉与目录（算策略摘要）、策略清单与覆盖键、管理器、
-/// 两个开关（DuckDB 直连 / 显示系统对象）、缓存路径输入、状态与实体、宿主，
+/// 「显示系统对象」开关、缓存路径输入、状态与实体、宿主，
 /// 加上**两块预先建好的面板**与共用的分组构造器 `make_section`。
 struct AdvancedTab<'a, H: 'static> {
-    /// 驱动下拉（判断「是不是网络库」，决定加速说明与缓存路径行）。
-    driver: &'a Entity<SelectState<SearchableVec<SharedString>>>,
     /// 环境下拉。
     env: &'a Entity<SelectState<SearchableVec<SharedString>>>,
     /// 环境目录（算「X · 策略生效中」摘要）。
@@ -2340,11 +2335,9 @@ struct AdvancedTab<'a, H: 'static> {
     env_policies: &'a Rc<RefCell<Vec<(String, String, String)>>>,
     /// 已勾选的覆盖键（存策略类型）。
     overrides: &'a Rc<RefCell<Vec<String>>>,
-    /// DuckDB 直连开关。
-    duckdb_fed: &'a Rc<Cell<bool>>,
     /// 导航「显示系统对象」开关。
     show_system_objects: &'a Rc<Cell<bool>>,
-    /// 缓存路径输入（只在网络库 + 开启加速时出现）。
+    /// 元数据/缓存路径覆盖（留空 = 走引擎默认）。
     cache_path: &'a Entity<InputState>,
     /// 对话框状态（`set_policy_override`）。
     state: &'a Rc<ConnectionDialogState<H>>,
@@ -2364,20 +2357,18 @@ struct AdvancedTab<'a, H: 'static> {
     make_section: &'a dyn Fn(&'static str, Icon, Hsla, &str, Div) -> Div,
 }
 
-/// 高级页：驱动属性（页首）→ 环境 → 安全策略覆盖 → DuckDB 直连 → 导航 → 能力（页尾）。
+/// 高级页：驱动属性（页首）→ 环境 → 安全策略覆盖 → 元数据/缓存 → 导航 → 能力（页尾）。
 ///
 /// 驱动属性刻意放页首：它直接决定连接能不能通，不该埋在页尾让人翻滚动条；
 /// 能力清单是只读展示，放页尾——普通用户不必先读懂能力矩阵才敢保存。
 ///
-/// `cx` 只用于读两个下拉的当前值（驱动 / 环境），不做任何写回。
+/// `cx` 只用于读环境下拉的当前值，不做任何写回。
 fn advanced_tab_ui<H: 'static>(p: AdvancedTab<'_, H>, cx: &App) -> Div {
     let AdvancedTab {
-        driver,
         env,
         env_list,
         env_policies,
         overrides,
-        duckdb_fed,
         show_system_objects,
         cache_path,
         state,
@@ -2389,21 +2380,12 @@ fn advanced_tab_ui<H: 'static>(p: AdvancedTab<'_, H>, cx: &App) -> Div {
         theme,
         make_section,
     } = p;
-    let duckdb_fed = Rc::clone(duckdb_fed);
     let show_system_objects = Rc::clone(show_system_objects);
     let overrides_click = Rc::clone(overrides);
     let state_click = Rc::clone(state);
     let shared_click = Rc::clone(shared);
 
-    // ===== 高级：环境 + 策略覆盖 + DuckDB 加速 =====
-    let is_network_db = {
-        let db = driver
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .unwrap_or_default();
-        db != "sqlite" && db != "duckdb" && !db.is_empty()
-    };
+    // ===== 高级：环境 + 策略覆盖 + 导航 =====
     let env_summary = {
         let sel = env.read(cx).selected_value().cloned();
         if let Some(n) = sel {
@@ -2536,65 +2518,24 @@ fn advanced_tab_ui<H: 'static>(p: AdvancedTab<'_, H>, cx: &App) -> Div {
         tr("安全策略（覆盖环境默认）"),
         div().w_full().v_flex().gap(rems(GAP_SM)).child(sec_rows),
     ));
-    // 分组③ DuckDB 直连（**所有类型都摆**）：网络库用于本地加速 + 跨源，
-    // 文件库（sqlite / duckdb）不需要加速，但可以作**联邦源**参与跨源查询。
+    // 分组③ 元数据 / 缓存路径：分析引擎为该连接落的缓存目录（留空 = 引擎默认）。
+    // 2026-11-27 起「能不能当源」不看这里，看驱动能力 + 项目意图清单里的登记。
     {
-        // DuckDB 加速开关：gpui-component `Switch`（决策 #84；默认尺寸 36×20，与原型 HTML 一致）。
-        let toggle = Switch::new("duckdb-fed")
-            .checked(duckdb_fed.get())
-            .disabled(form_disabled)
-            .on_click({
-                let duckdb_fed = duckdb_fed.clone();
-                let entity = entity.clone();
-                move |want, _window, app| {
-                    duckdb_fed.set(*want);
-                    entity.update(app, |_, cx| cx.notify());
-                }
-            });
-        let mut accel_body = div()
+        let cache_body = div()
             .w_full()
             .v_flex()
             .gap(rems(GAP_SM))
             .child(hint_line(
                 theme,
-                if is_network_db {
-                    "开启后：分析引擎可只读挂载本连接 —— 本地加速与跨源（联邦）查询都用它；凭据只在内存里传递（不写进 URL 与日志）"
-                } else {
-                    "开启后：本文件库可作为**联邦源**参与跨源查询（本地文件不需要本地加速）；凭据只在内存里传递"
-                },
+                "可留空：留空时由分析引擎按默认策略分配目录；仅影响缓存落盘位置，不影响连接本身",
             ))
-            .child(form_row(
-                theme,
-                tr("启用"),
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap(rems(GAP_SM))
-                    .child(toggle)
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(if duckdb_fed.get() { "已开启" } else { "已关闭" }),
-                    ),
-            ));
-        if duckdb_fed.get() {
-            if is_network_db {
-                accel_body = accel_body.child(form_row(theme, "缓存路径", Input::new(cache_path)));
-            }
-            accel_body = accel_body.child(hint_line(
-                theme,
-                "已开启：本连接会出现在联邦源清单里（跨源查询写 别名.schema.表；文件库写 别名.schema.表 同样适用）；缓存上限 / 自动刷新 / 压缩由分析引擎默认策略管理",
-            ));
-        } else {
-            accel_body = accel_body.child(hint_line(theme, "关闭：本地加速与联邦查询都不用本连接"));
-        }
+            .child(form_row(theme, tr("路径"), Input::new(cache_path)));
         content = content.child(make_section(
-            "accel",
-            lucide("icons/database-zap.svg"),
-            theme.colors.warning,
-            "DuckDB 直连（本地加速 / 用作联邦源）",
-            accel_body,
+            "cache",
+            lucide("icons/database.svg"),
+            theme.colors.muted_foreground,
+            tr("元数据 / 缓存"),
+            cache_body,
         ));
     }
     // 分组④ 导航（P1，2026-10-25）：连接级导航偏好——「显示系统对象」，

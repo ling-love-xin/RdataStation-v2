@@ -270,7 +270,6 @@ pub fn connection_item_from_info(c: GlobalConnectionInfo, environment: Option<St
         database: c.database,
         schema: c.schema_name,
         description: c.description,
-        use_duckdb_fed: c.use_duckdb_fed,
         environment,
         created_at: c.created_at,
         updated_at: c.updated_at,
@@ -289,7 +288,6 @@ fn project_connection_to_item(c: ProjectConnection) -> ConnectionItem {
         database: c.database,
         schema: c.schema_name,
         description: c.description,
-        use_duckdb_fed: c.use_duckdb_fed,
         // 项目侧连接模型没有环境绑定（环境是全局域的概念），如实置 None
         environment: None,
         created_at: c.created_at,

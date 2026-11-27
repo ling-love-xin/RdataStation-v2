@@ -109,7 +109,6 @@ fn save_then_list_roundtrip_global_scope() {
     );
     i.username = Some("alice".into());
     i.password = Some("s3cret".into());
-    i.use_duckdb_fed = Some(true);
 
     let id = rt.block_on(service.save(&i, None)).expect("save");
     assert!(id.starts_with("G_conn_"), "仅全局应生成 G_ 前缀：{id}");
@@ -125,7 +124,6 @@ fn save_then_list_roundtrip_global_scope() {
     assert_eq!(ds.database.as_deref(), Some("warehouse"));
     assert_eq!(ds.username.as_deref(), Some("alice"));
     assert!(ds.password_encrypted.is_some(), "凭据应加密落库");
-    assert_eq!(ds.use_duckdb_fed, Some(true), "已开启本地加速");
     assert_eq!(ds.scope, ConnectionScope::Global);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -219,12 +217,11 @@ fn delete_removes_connection_and_cleans_secret() {
     let service = make_service(&dir);
     let rt = runtime();
 
-    let mut i = input(
+    let i = input(
         "fed_pg",
         "postgres",
         "postgres://bob:pw@127.0.0.1:5432/analytics",
     );
-    i.use_duckdb_fed = Some(true);
     let id = rt.block_on(service.save(&i, None)).expect("save");
 
     // 保存应联动注册 DuckDB Secret（目标库与 Secret 目录均隔离在临时目录）。
@@ -271,8 +268,7 @@ fn duckdb_file_source_never_registers_secret_even_with_federation() {
     let service = make_service(&dir);
     let rt = runtime();
 
-    let mut i = input("fed_duck", "duckdb", "D:/data/store.duckdb");
-    i.use_duckdb_fed = Some(true);
+    let i = input("fed_duck", "duckdb", "D:/data/store.duckdb");
     let id = rt.block_on(service.save(&i, None)).expect("save");
 
     let secret_db = dir.join("secret-target.duckdb");
@@ -286,8 +282,7 @@ fn duckdb_file_source_never_registers_secret_even_with_federation() {
     drop(mgr);
 
     // 更新（fed 保持开）同样不注册
-    let mut u = input("fed_duck", "duckdb", "D:/data/renamed.duckdb");
-    u.use_duckdb_fed = Some(true);
+    let u = input("fed_duck", "duckdb", "D:/data/renamed.duckdb");
     rt.block_on(service.update(&id, &u, None)).expect("update");
     let mgr = connection::secret::SecretManager::open_with_dir(&secret_db, Some(&secret_dir))
         .expect("reopen secret db");
@@ -310,7 +305,6 @@ fn project_side_save_registers_secret_to_project_analysis_db_and_delete_removes(
 
     let mut i = input("proj_pg", "postgres", "postgres://u:p@127.0.0.1:5432/pgdb");
     i.scope = ConnectionScope::Project;
-    i.use_duckdb_fed = Some(true);
     let id = rt
         .block_on(service.save(&i, Some(&project_root.to_string_lossy())))
         .expect("save");
@@ -380,12 +374,11 @@ fn save_without_federation_does_not_register_secret() {
     let service = make_service(&dir);
     let rt = runtime();
 
-    let mut i = input(
+    let i = input(
         "plain_pg",
         "postgres",
         "postgres://u:p@127.0.0.1:5432/plain",
     );
-    i.use_duckdb_fed = Some(false);
     rt.block_on(service.save(&i, None)).expect("save");
 
     let secret_dir = dir.join("secrets");
@@ -409,8 +402,7 @@ fn delete_without_federation_skips_secret() {
     let service = make_service(&dir);
     let rt = runtime();
 
-    let mut i = input("plain_sqlite", "sqlite", "sqlite:///tmp/plain.db");
-    i.use_duckdb_fed = Some(false);
+    let i = input("plain_sqlite", "sqlite", "sqlite:///tmp/plain.db");
     let id = rt.block_on(service.save(&i, None)).expect("save");
 
     let result = rt.block_on(service.delete(&id, None)).expect("delete");
@@ -453,7 +445,6 @@ fn global_and_project_scope_writes_both_sides() {
     i.scope = ConnectionScope::GlobalAndProject;
     i.username = Some("carol".into());
     i.password = Some("pw".into());
-    i.use_duckdb_fed = Some(true);
     let path = project_root.to_string_lossy().to_string();
 
     let pid = rt.block_on(service.save(&i, Some(&path))).expect("save gp");

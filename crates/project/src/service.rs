@@ -466,8 +466,8 @@ pub fn ensure_sample_data(root: &Path) -> Result<(), String> {
 
 /// 把示例项目的两个业务库登记成**全局连接**（导航树里就能看到、可直接打开）。
 ///
-/// 注意 `use_duckdb_fed: Some(false)`：可直连、未开本地加速——加速是用户自己按源段那颗
-/// 「挂载」两态按钮的事，示例项目不替用户先做决定（三态口径见连接文档）。
+/// 只建连接记录（没有任何"直连开关"可写）；能不能当源由驱动决定（sqlite / duckdb 都能），
+/// 要不要用它当源由项目登记表决定——下面紧接着登记成联邦源，供源段直接可用。
 pub fn ensure_sample_connections(root: &Path) -> Result<(), String> {
     use engine::migration::global_init;
     use engine::persistence::global_db::GlobalConnectionSaveInput;
@@ -515,16 +515,14 @@ pub fn ensure_sample_connections(root: &Path) -> Result<(), String> {
             options: None,
             driver_properties: None,
             advanced_options: None,
-            use_duckdb_fed: Some(false),
             metadata_path: None,
             schema_name: None,
             save_password: false,
         }))
         .map_err(|e| format!("登记示例连接「{name}」失败: {e}"))?;
 
-        // 「有值即登记」：`use_duckdb_fed = Some(false)` 就是「允许 DuckDB 直连」这个意图，
-        // 项目登记表（`analysis_sources`）里必须有一行——否则源段显示「未登记 · 全局」，
-        // 也没有稳定别名给联邦引用。幂等（已登记就不重复写），失败只记日志。
+        // 示例项目里就登记成项目源（`analysis_sources`）：源段直接可用、别名稳定。
+        // 登记只是意图；挂载与否是会话事实。幂等（已登记就不重复写），失败只记日志。
         if let Err(e) = engine::analysis::registration::ensure_conn_registered(root, conn_id, name) {
             tracing::warn!("示例连接「{name}」登记为项目源失败：{e}");
         }

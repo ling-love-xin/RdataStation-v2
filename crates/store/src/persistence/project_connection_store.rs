@@ -20,7 +20,6 @@ pub struct ProjectConnection {
     pub password_encrypted: Option<String>,
     pub options: Option<String>,
     pub tags: Option<String>,
-    pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<String>,
     pub is_active: bool,
     pub server_version: Option<String>,
@@ -61,7 +60,6 @@ impl ProjectConnectionStore {
                 password_encrypted TEXT,
                 options            TEXT,
                 tags               TEXT,
-                use_duckdb_fed     BOOLEAN DEFAULT 0,
                 metadata_path      TEXT,
                 is_active          BOOLEAN DEFAULT 1,
                 server_version     TEXT,
@@ -188,10 +186,10 @@ impl ProjectConnectionStore {
             .execute(
                 "INSERT INTO connections (
                 id, name, driver, host, port, database, schema_name, username, password_encrypted,
-                options, tags, use_duckdb_fed, metadata_path, is_active,
+                options, tags, metadata_path, is_active,
                 server_version, description, driver_id, environment_id, auth_config_id,
                 auth_method, network_config_id, driver_properties, advanced_options, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, COALESCE(NULLIF(?24, ''), CURRENT_TIMESTAMP), COALESCE(NULLIF(?25, ''), CURRENT_TIMESTAMP))",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, COALESCE(NULLIF(?23, ''), CURRENT_TIMESTAMP), COALESCE(NULLIF(?24, ''), CURRENT_TIMESTAMP))",
                 rusqlite::params![
                     conn.id,
                     conn.name,
@@ -204,7 +202,6 @@ impl ProjectConnectionStore {
                     conn.password_encrypted,
                     conn.options,
                     conn.tags,
-                    conn.use_duckdb_fed,
                     conn.metadata_path,
                     conn.is_active,
                     conn.server_version,
@@ -241,15 +238,15 @@ impl ProjectConnectionStore {
             "UPDATE connections SET
                 name = ?2, driver = ?3, host = ?4, port = ?5, database = ?6,
                 schema_name = ?7, username = ?8, password_encrypted = COALESCE(?9, password_encrypted), options = ?10,
-                tags = ?11, use_duckdb_fed = ?12, metadata_path = ?13, is_active = ?14,
-                server_version = ?15, description = ?16, driver_id = ?17, environment_id = ?18,
-                auth_config_id = ?19, auth_method = ?20, network_config_id = ?21, driver_properties = ?22,
-                advanced_options = ?23, updated_at = COALESCE(NULLIF(?24, ''), CURRENT_TIMESTAMP)
+                tags = ?11, metadata_path = ?12, is_active = ?13,
+                server_version = ?14, description = ?15, driver_id = ?16, environment_id = ?17,
+                auth_config_id = ?18, auth_method = ?19, network_config_id = ?20, driver_properties = ?21,
+                advanced_options = ?22, updated_at = COALESCE(NULLIF(?23, ''), CURRENT_TIMESTAMP)
             WHERE id = ?1",
             rusqlite::params![
                 conn.id, conn.name, conn.driver, conn.host, conn.port, conn.database,
                 conn.schema_name, conn.username, conn.password_encrypted, conn.options, conn.tags,
-                conn.use_duckdb_fed, conn.metadata_path, conn.is_active,
+                conn.metadata_path, conn.is_active,
                 conn.server_version, conn.description, conn.driver_id, conn.environment_id,
                 conn.auth_config_id, conn.auth_method, conn.network_config_id, conn.driver_properties,
                 conn.advanced_options, conn.updated_at
@@ -285,7 +282,7 @@ impl ProjectConnectionStore {
 
         let mut stmt = sqlite.inner()?.prepare(
             "SELECT id, name, driver, host, port, database, schema_name, username, password_encrypted,
-                    options, tags, use_duckdb_fed, metadata_path, is_active,
+                    options, tags, metadata_path, is_active,
                     server_version, description, driver_id, environment_id, auth_config_id,
                     auth_method, network_config_id, driver_properties, advanced_options, created_at, updated_at
              FROM connections WHERE id = ?1"
@@ -308,20 +305,19 @@ impl ProjectConnectionStore {
                 password_encrypted: row.get(8)?,
                 options: row.get(9)?,
                 tags: row.get(10)?,
-                use_duckdb_fed: row.get(11)?,
-                metadata_path: row.get(12)?,
-                is_active: row.get(13)?,
-                server_version: row.get(14)?,
-                description: row.get(15)?,
-                driver_id: row.get(16)?,
-                environment_id: row.get(17)?,
-                auth_config_id: row.get(18)?,
-                auth_method: row.get(19).ok(),
-                network_config_id: row.get(20)?,
-                driver_properties: row.get(21)?,
-                advanced_options: row.get(22)?,
-                created_at: row.get(23)?,
-                updated_at: row.get(24)?,
+                metadata_path: row.get(11)?,
+                is_active: row.get(12)?,
+                server_version: row.get(13)?,
+                description: row.get(14)?,
+                driver_id: row.get(15)?,
+                environment_id: row.get(16)?,
+                auth_config_id: row.get(17)?,
+                auth_method: row.get(18).ok(),
+                network_config_id: row.get(19)?,
+                driver_properties: row.get(20)?,
+                advanced_options: row.get(21)?,
+                created_at: row.get(22)?,
+                updated_at: row.get(23)?,
             })
         });
 
@@ -341,7 +337,7 @@ impl ProjectConnectionStore {
 
         let mut stmt = sqlite.inner()?.prepare(
             "SELECT id, name, driver, host, port, database, schema_name, username, password_encrypted,
-                    options, tags, use_duckdb_fed, metadata_path, is_active,
+                    options, tags, metadata_path, is_active,
                     server_version, description, driver_id, environment_id, auth_config_id,
                     auth_method, network_config_id, driver_properties, advanced_options, created_at, updated_at
              FROM connections ORDER BY updated_at DESC"
@@ -365,20 +361,19 @@ impl ProjectConnectionStore {
                     password_encrypted: row.get(8)?,
                     options: row.get(9)?,
                     tags: row.get(10)?,
-                    use_duckdb_fed: row.get(11)?,
-                    metadata_path: row.get(12)?,
-                    is_active: row.get(13)?,
-                    server_version: row.get(14)?,
-                    description: row.get(15)?,
-                    driver_id: row.get(16)?,
-                    environment_id: row.get(17)?,
-                    auth_config_id: row.get(18)?,
-                    auth_method: row.get(19).ok(),
-                    network_config_id: row.get(20)?,
-                    driver_properties: row.get(21)?,
-                    advanced_options: row.get(22)?,
-                    created_at: row.get(23)?,
-                    updated_at: row.get(24)?,
+                    metadata_path: row.get(11)?,
+                    is_active: row.get(12)?,
+                    server_version: row.get(13)?,
+                    description: row.get(14)?,
+                    driver_id: row.get(15)?,
+                    environment_id: row.get(16)?,
+                    auth_config_id: row.get(17)?,
+                    auth_method: row.get(18).ok(),
+                    network_config_id: row.get(19)?,
+                    driver_properties: row.get(20)?,
+                    advanced_options: row.get(21)?,
+                    created_at: row.get(22)?,
+                    updated_at: row.get(23)?,
                 })
             })
             .map_err(|e| {
@@ -406,7 +401,7 @@ impl ProjectConnectionStore {
 
         let mut stmt = sqlite.inner()?.prepare(
             "SELECT id, name, driver, host, port, database, schema_name, username, password_encrypted,
-                    options, tags, use_duckdb_fed, metadata_path, is_active,
+                    options, tags, metadata_path, is_active,
                     server_version, description, driver_id, environment_id, auth_config_id,
                     auth_method, network_config_id, driver_properties, advanced_options, created_at, updated_at
              FROM connections WHERE driver = ?1 ORDER BY updated_at DESC"
@@ -430,20 +425,19 @@ impl ProjectConnectionStore {
                     password_encrypted: row.get(8)?,
                     options: row.get(9)?,
                     tags: row.get(10)?,
-                    use_duckdb_fed: row.get(11)?,
-                    metadata_path: row.get(12)?,
-                    is_active: row.get(13)?,
-                    server_version: row.get(14)?,
-                    description: row.get(15)?,
-                    driver_id: row.get(16)?,
-                    environment_id: row.get(17)?,
-                    auth_config_id: row.get(18)?,
-                    auth_method: row.get(19).ok(),
-                    network_config_id: row.get(20)?,
-                    driver_properties: row.get(21)?,
-                    advanced_options: row.get(22)?,
-                    created_at: row.get(23)?,
-                    updated_at: row.get(24)?,
+                    metadata_path: row.get(11)?,
+                    is_active: row.get(12)?,
+                    server_version: row.get(13)?,
+                    description: row.get(14)?,
+                    driver_id: row.get(15)?,
+                    environment_id: row.get(16)?,
+                    auth_config_id: row.get(17)?,
+                    auth_method: row.get(18).ok(),
+                    network_config_id: row.get(19)?,
+                    driver_properties: row.get(20)?,
+                    advanced_options: row.get(21)?,
+                    created_at: row.get(22)?,
+                    updated_at: row.get(23)?,
                 })
             })
             .map_err(|e| {
@@ -492,7 +486,7 @@ impl ProjectConnectionStore {
 
         let mut stmt = sqlite.inner()?.prepare(
             "SELECT id, name, driver, host, port, database, schema_name, username, password_encrypted,
-                    options, tags, use_duckdb_fed, metadata_path, is_active,
+                    options, tags, metadata_path, is_active,
                     server_version, description, driver_id, environment_id, auth_config_id,
                     auth_method, network_config_id, driver_properties, advanced_options, created_at, updated_at
              FROM connections
@@ -518,20 +512,19 @@ impl ProjectConnectionStore {
                     password_encrypted: row.get(8)?,
                     options: row.get(9)?,
                     tags: row.get(10)?,
-                    use_duckdb_fed: row.get(11)?,
-                    metadata_path: row.get(12)?,
-                    is_active: row.get(13)?,
-                    server_version: row.get(14)?,
-                    description: row.get(15)?,
-                    driver_id: row.get(16)?,
-                    environment_id: row.get(17)?,
-                    auth_config_id: row.get(18)?,
-                    auth_method: row.get(19).ok(),
-                    network_config_id: row.get(20)?,
-                    driver_properties: row.get(21)?,
-                    advanced_options: row.get(22)?,
-                    created_at: row.get(23)?,
-                    updated_at: row.get(24)?,
+                    metadata_path: row.get(11)?,
+                    is_active: row.get(12)?,
+                    server_version: row.get(13)?,
+                    description: row.get(14)?,
+                    driver_id: row.get(15)?,
+                    environment_id: row.get(16)?,
+                    auth_config_id: row.get(17)?,
+                    auth_method: row.get(18).ok(),
+                    network_config_id: row.get(19)?,
+                    driver_properties: row.get(20)?,
+                    advanced_options: row.get(21)?,
+                    created_at: row.get(22)?,
+                    updated_at: row.get(23)?,
                 })
             })
             .map_err(|e| {

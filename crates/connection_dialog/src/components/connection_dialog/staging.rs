@@ -55,8 +55,6 @@ pub struct TemplateItem {
     pub ssl_mode: String,
     #[serde(default)]
     pub tags: String,
-    #[serde(default)]
-    pub duckdb_fed: bool,
 }
 
 /// 暂存列表光标位条目的显示视图（见 `live_entry_view`）。
@@ -103,7 +101,6 @@ pub struct ConnectionDraft {
     pub ssl_cert: String,
     pub ssl_key: String,
     pub cache_path: String,
-    pub duckdb_fed: bool,
     pub active_tab: usize,
     pub props: Vec<(String, String)>,
     /// 策略覆盖勾选（存 `environment_policies.policy_type`；旧草稿的布尔数组解析失败即忽略；
@@ -124,7 +121,6 @@ impl ConnectionDraft {
     /// 新建空草稿（默认值与对话框初始状态一致）。
     pub fn empty() -> Self {
         Self {
-            duckdb_fed: true,
             save_credentials: true,
             show_system_objects: false,
             sec_overrides: Vec::new(),
@@ -177,7 +173,6 @@ impl<H: 'static> ConnectionDialogState<H> {
             ssl_cert: d.ssl_cert.clone(),
             ssl_key: d.ssl_key.clone(),
             cache_path: d.cache_path.clone(),
-            duckdb_fed: d.duckdb_fed,
             active_tab: d.active_tab as i64,
             // 内联协议链已撤下（#25）：列保留（不迁移 schema），固定写空数组。
             hops_json: "[]".into(),
@@ -212,7 +207,6 @@ impl<H: 'static> ConnectionDialogState<H> {
             ssl_cert: r.ssl_cert.clone(),
             ssl_key: r.ssl_key.clone(),
             cache_path: r.cache_path.clone(),
-            duckdb_fed: r.duckdb_fed,
             // 草稿行无此列：编辑回读默认保存凭据（P0-4；用户可再关）。
             save_credentials: true,
             // 草稿行无此列：编辑回读默认现状（隐藏系统对象；用户可再开）。
@@ -291,7 +285,6 @@ impl<H: 'static> ConnectionDialogState<H> {
             ssl_cert: self.ssl_cert.read(cx).value().to_string(),
             ssl_key: self.ssl_key.read(cx).value().to_string(),
             cache_path: self.cache_path.read(cx).value().to_string(),
-            duckdb_fed: self.duckdb_fed.get(),
             save_credentials: self.save_credentials.get(),
             show_system_objects: self.show_system_objects.get(),
             active_tab: self.active_tab.get(),
@@ -398,7 +391,6 @@ impl<H: 'static> ConnectionDialogState<H> {
             && d.ssl_cert.as_str() == &*self.ssl_cert.read(cx).value()
             && d.ssl_key.as_str() == &*self.ssl_key.read(cx).value()
             && d.cache_path.as_str() == &*self.cache_path.read(cx).value()
-            && d.duckdb_fed == self.duckdb_fed.get()
             && d.active_tab == self.active_tab.get()
             && d.props.as_slice() == self.props.borrow().as_slice()
             && d.sec_overrides.as_slice() == self.policy_override_keys.borrow().as_slice()
@@ -508,7 +500,6 @@ impl<H: 'static> ConnectionDialogState<H> {
             cx,
         );
         set_select_value(&self.env, d.env.as_deref().unwrap_or(""), window, cx);
-        self.duckdb_fed.set(d.duckdb_fed);
         // 旧草稿可能停在已收敛的 2（能力）/ 3（驱动属性）上：恢复时归一到「高级」（#110）。
         // 文件型的「网络」由渲染入口按类型再归一（那里才有 `is_file_db`）。
         self.active_tab
@@ -660,7 +651,6 @@ impl<H: 'static> ConnectionDialogState<H> {
                 project_path: d.project_path.clone(),
                 ssl_mode: d.ssl_mode.clone(),
                 tags: d.tags.clone(),
-                duckdb_fed: d.duckdb_fed,
             })
             .collect();
         serde_json::to_string_pretty(&ConnectionTemplate {
@@ -727,7 +717,6 @@ impl<H: 'static> ConnectionDialogState<H> {
                         scope: item.scope,
                         project_path: item.project_path,
                         ssl_mode: item.ssl_mode,
-                        duckdb_fed: item.duckdb_fed,
                         ..ConnectionDraft::empty()
                     }
                 })

@@ -41,7 +41,6 @@ pub struct GlobalConnectionInfo {
     pub password_encrypted: Option<String>,
     pub options: Option<String>,
     pub tags: Option<String>,
-    pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<String>,
     pub is_active: bool,
     pub created_at: String,
@@ -366,7 +365,6 @@ pub struct GlobalConnectionUpdateInput {
     pub options: Option<String>,
     pub driver_properties: Option<String>,
     pub advanced_options: Option<String>,
-    pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<String>,
 }
 
@@ -392,7 +390,6 @@ pub struct GlobalConnectionSaveInput<'a> {
     pub options: Option<&'a str>,
     pub driver_properties: Option<&'a str>,
     pub advanced_options: Option<&'a str>,
-    pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<&'a str>,
     pub schema_name: Option<&'a str>,
     /// 是否保存凭据（2026-10-24 P0-4，对齐 DBeaver `setSavePassword(true)`）：
@@ -484,7 +481,6 @@ impl GlobalDatabaseManager {
         // 检查并添加缺失的字段
         let columns_to_add = [
             ("global_connections", "schema_name", "TEXT"),
-            ("global_connections", "use_duckdb_fed", "BOOLEAN DEFAULT 0"),
             ("global_connections", "metadata_path", "TEXT"),
         ];
 
@@ -706,18 +702,10 @@ impl GlobalDatabaseManager {
             .map_err(|e| CoreError::common(CommonError::General(e)))?
             .unwrap_or_else(|| "[\"global\"]".to_string());
 
-        // 三态写库：`None` 显式写 NULL（不可直连），`Some(false)` → 0，`Some(true)` → 1。
-        // 不依赖列的 `DEFAULT 0`——那会把“不可直连”写成“可直连未加速”。
-        // 绑定参数走 `'null'` 哨兵 + SQL 侧 `NULLIF`，因为这条 INSERT 的参数数组要求同类型。
-        let fed_value: &str = match input.use_duckdb_fed {
-            Some(true) => "1",
-            Some(false) => "0",
-            None => "null",
-        };
         conn.inner()?.execute(
             "INSERT OR REPLACE INTO global_connections
-             (id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, use_duckdb_fed, metadata_path, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options, is_active, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULLIF(?12, 'null'), ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, 1, CURRENT_TIMESTAMP)",
+             (id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, metadata_path, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options, is_active, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, 1, CURRENT_TIMESTAMP)",
             [
                 input.conn_id,
                 input.name,
@@ -730,7 +718,6 @@ impl GlobalDatabaseManager {
                 &final_password,
                 input.options.unwrap_or(""),
                 &tags_json,
-                fed_value,
                 input.metadata_path.unwrap_or(""),
                 input.server_version.unwrap_or(""),
                 input.description.unwrap_or(""),
@@ -816,20 +803,16 @@ impl GlobalDatabaseManager {
             }
         };
 
-        // 三态：`None` → NULL（不可直连），`Some(false)` → 0，`Some(true)` → 1
-        let use_duckdb_fed_str: Option<&str> =
-            input.use_duckdb_fed.map(|v| if v { "1" } else { "0" });
-
         conn.inner()?
             .execute(
                 "UPDATE global_connections SET
                 name = ?2, driver = ?3, host = ?4, port = ?5, database = ?6,
                 schema_name = ?7, username = ?8, password_encrypted = ?9,
-                options = ?10, tags = ?11, use_duckdb_fed = ?12,
-                metadata_path = ?13, server_version = ?14, description = ?15,
-                driver_id = ?16, environment_id = ?17, auth_config_id = ?18,
-                auth_method = ?19, network_config_id = ?20,
-                driver_properties = ?21, advanced_options = ?22, updated_at = CURRENT_TIMESTAMP
+                options = ?10, tags = ?11,
+                metadata_path = ?12, server_version = ?13, description = ?14,
+                driver_id = ?15, environment_id = ?16, auth_config_id = ?17,
+                auth_method = ?18, network_config_id = ?19,
+                driver_properties = ?20, advanced_options = ?21, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?1 AND is_active = 1",
                 rusqlite::params![
                     input.conn_id,
@@ -843,7 +826,6 @@ impl GlobalDatabaseManager {
                     password_encrypted.as_deref().unwrap_or(""),
                     input.options.as_deref().unwrap_or(""),
                     input.tags.as_deref().unwrap_or(""),
-                    use_duckdb_fed_str,
                     input.metadata_path.as_deref().unwrap_or(""),
                     input.server_version.as_deref().unwrap_or(""),
                     input.description.as_deref().unwrap_or(""),
@@ -881,7 +863,7 @@ impl GlobalDatabaseManager {
 
         let connections: Vec<GlobalConnectionInfo> = {
             let base_sql = format!(
-                "SELECT id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, use_duckdb_fed, metadata_path, is_active, created_at, updated_at, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options
+                "SELECT id, name, driver, host, port, database, schema_name, username, password_encrypted, options, tags, metadata_path, is_active, created_at, updated_at, server_version, description, driver_id, environment_id, auth_config_id, auth_method, network_config_id, driver_properties, advanced_options
                  FROM global_connections
                  WHERE is_active = 1
                  ORDER BY updated_at DESC{}{}",
@@ -899,24 +881,18 @@ impl GlobalDatabaseManager {
             let rows = stmt
                 .query_map([], |row| {
                     let tags: Option<String> = row.get(10).ok();
-                    // 三态：NULL = 不可被 DuckDB 直连；0 = 可直连未开加速；1 = 已开加速
-                    let use_duckdb_fed: Option<bool> = row
-                        .get::<_, Option<i64>>(11)
-                        .ok()
-                        .flatten()
-                        .map(|raw| raw != 0);
-                    let metadata_path: Option<String> = row.get(12).ok();
-                    let created_at: String = row.get(14).unwrap_or_default();
-                    let updated_at: String = row.get(15).unwrap_or_default();
-                    let server_version: Option<String> = row.get(16).ok();
-                    let description: Option<String> = row.get(17).ok();
-                    let driver_id: Option<String> = row.get(18).ok();
-                    let environment_id: Option<String> = row.get(19).ok();
-                    let auth_config_id: Option<String> = row.get(20).ok();
-                    let auth_method: Option<String> = row.get(21).ok();
-                    let network_config_id: Option<String> = row.get(22).ok();
-                    let driver_properties: Option<String> = row.get(23).ok();
-                    let advanced_options: Option<String> = row.get(24).ok();
+                    let metadata_path: Option<String> = row.get(11).ok();
+                    let created_at: String = row.get(13).unwrap_or_default();
+                    let updated_at: String = row.get(14).unwrap_or_default();
+                    let server_version: Option<String> = row.get(15).ok();
+                    let description: Option<String> = row.get(16).ok();
+                    let driver_id: Option<String> = row.get(17).ok();
+                    let environment_id: Option<String> = row.get(18).ok();
+                    let auth_config_id: Option<String> = row.get(19).ok();
+                    let auth_method: Option<String> = row.get(20).ok();
+                    let network_config_id: Option<String> = row.get(21).ok();
+                    let driver_properties: Option<String> = row.get(22).ok();
+                    let advanced_options: Option<String> = row.get(23).ok();
 
                     Ok(GlobalConnectionInfo {
                         id: row.get(0)?,
@@ -930,9 +906,8 @@ impl GlobalDatabaseManager {
                         password_encrypted: row.get(8).ok(),
                         options: row.get(9).ok(),
                         tags,
-                        use_duckdb_fed,
                         metadata_path,
-                        is_active: row.get(13).unwrap_or(true),
+                        is_active: row.get(12).unwrap_or(true),
                         created_at,
                         updated_at,
                         server_version,
@@ -2284,7 +2259,6 @@ mod tests {
                 options: None,
                 driver_properties: None,
                 advanced_options: None,
-                use_duckdb_fed: None,
                 metadata_path: None,
                 schema_name: None,
             })
@@ -2311,7 +2285,6 @@ mod tests {
                 options: None,
                 driver_properties: None,
                 advanced_options: None,
-                use_duckdb_fed: None,
                 metadata_path: None,
                 schema_name: None,
             })

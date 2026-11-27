@@ -50,7 +50,6 @@ fn base_dir() -> PathBuf {
 fn marked(name: &str, db_type: &str, url: &str) -> DataSourceSaveInput {
     let mut input = DataSourceSaveInput::new(name, db_type, url);
     input.scope = ConnectionScope::Global;
-    input.use_duckdb_fed = Some(true);
     input
 }
 
