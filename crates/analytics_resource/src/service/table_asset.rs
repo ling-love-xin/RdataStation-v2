@@ -32,7 +32,10 @@ pub struct ArchiveTableRequest {
     pub source_schema: String,
     /// 源表名。
     pub source_table: String,
-    /// 追加到已有资产；`None` 时按显示名找同名活跃资产。
+    /// 追加到已有资产；`None` 只允许新建资产，**不会按显示名自动接链**。
+    ///
+    /// 同名存活资产必须显式传 `asset_id` 才能追加版本：显示名不是资产身份，
+    /// 单凭名字接链会把不同源表静默写进同一条版本链。
     pub asset_id: Option<String>,
     /// 默认 `true`：显式归档消费源表（T8）。
     pub consume_source: bool,
@@ -98,7 +101,14 @@ pub async fn archive_table(
                     request.name.trim()
                 )));
             }
-            matches.pop()
+            if let Some(holder) = matches.pop() {
+                return Err(user_err(&format!(
+                    "显示名「{}」已被资产（id={}）占用；要追加到该资产请显式指定 asset_id，新建请换一个名字",
+                    request.name.trim(),
+                    holder.id
+                )));
+            }
+            None
         }
         None => None,
     };
@@ -114,7 +124,7 @@ pub async fn archive_table(
     }
 
     // 1) 读结构 + 数据指纹，并判断是否需要新快照。
-    let (manifest, snapshot) = {
+    let (manifest, snapshot, created_physical) = {
         let handle = duckdb.acquire().await?;
         let guard = handle.lock().await;
         let conn = guard
@@ -135,6 +145,7 @@ pub async fn archive_table(
             }),
             Err(_) => None,
         };
+        let created = reusable.is_none();
         let snapshot = match reusable {
             Some(snapshot) => snapshot_draft(snapshot),
             None => {
@@ -149,102 +160,119 @@ pub async fn archive_table(
                 }
             }
         };
-        (manifest, snapshot)
+        // 只清“本次新建”的那张物理表：复用已有快照时，物理表不是本次写出来的，
+        // 元数据失败也不能删别人的数据。
+        let created_physical = created.then(|| snapshot.physical_table.clone());
+        (manifest, snapshot, created_physical)
     };
 
     // 2) 写元数据：首次建行 + v1，或追加新版本。
-    let outcome = match existing {
-        Some(current) => {
-            let head = store.table_asset_version(&current.id, current.version).await?;
-            let same_as_head = head
-                .as_ref()
-                .map(|version| version.manifest_id == manifest.manifest_id)
-                .unwrap_or(false);
-            if same_as_head
-                && current.analytics_table.as_deref() == Some(snapshot.physical_table.as_str())
-            {
-                let consumed = consume_source_if_needed(duckdb, request.consume_source, &source_schema, &source_table, &snapshot.physical_table).await;
-                return Ok(ArchiveTableOutcome {
-                    resource_id: current.id,
-                    name: current.name,
-                    version: current.version,
+    let outcome = async {
+        match existing {
+            Some(current) => {
+                let head = store.table_asset_version(&current.id, current.version).await?;
+                let same_as_head = head
+                    .as_ref()
+                    .map(|version| version.manifest_id == manifest.manifest_id)
+                    .unwrap_or(false);
+                if same_as_head
+                    && current.analytics_table.as_deref() == Some(snapshot.physical_table.as_str())
+                {
+                    let consumed = consume_source_if_needed(duckdb, request.consume_source, &source_schema, &source_table, &snapshot.physical_table).await;
+                    return Ok(ArchiveTableOutcome {
+                        resource_id: current.id,
+                        name: current.name,
+                        version: current.version,
+                        snapshot_id: snapshot.snapshot_id,
+                        manifest_id: manifest.manifest_id,
+                        created_new_version: false,
+                        source_consumed: consumed,
+                    });
+                }
+                let new_version = current.version + 1;
+                let detail = format!("归档普通表 {source_schema}.{source_table} 为 v{new_version}");
+                let version_input = NewTableVersion {
+                    asset_id: current.id.clone(),
+                    version: new_version,
+                    parent_version: Some(current.version),
+                    manifest: manifest.clone(),
+                    snapshot: snapshot.clone(),
+                };
+                let updated = store
+                    .commit_table_version_to_head(
+                        &version_input,
+                        TimelineEventKind::Updated,
+                        Some(&detail),
+                        None,
+                    )
+                    .await?;
+                Ok(ArchiveTableOutcome {
+                    resource_id: updated.id,
+                    name: updated.name,
+                    version: updated.version,
                     snapshot_id: snapshot.snapshot_id,
                     manifest_id: manifest.manifest_id,
-                    created_new_version: false,
-                    source_consumed: consumed,
-                });
+                    created_new_version: true,
+                    source_consumed: false,
+                })
             }
-            let new_version = current.version + 1;
-            let detail = format!("归档普通表 {source_schema}.{source_table} 为 v{new_version}");
-            let version_input = NewTableVersion {
-                asset_id: current.id.clone(),
-                version: new_version,
-                parent_version: Some(current.version),
-                manifest: manifest.clone(),
-                snapshot: snapshot.clone(),
-            };
-            let updated = store
-                .commit_table_version_to_head(
-                    &version_input,
-                    TimelineEventKind::Updated,
-                    Some(&detail),
-                    None,
-                )
-                .await?;
-            ArchiveTableOutcome {
-                resource_id: updated.id,
-                name: updated.name,
-                version: updated.version,
-                snapshot_id: snapshot.snapshot_id,
-                manifest_id: manifest.manifest_id,
-                created_new_version: true,
-                source_consumed: false,
+            None => {
+                if request.name.trim().is_empty() {
+                    return Err(user_err("新表资产需要显示名"));
+                }
+                let detail = format!("归档普通表 {source_schema}.{source_table}");
+                let input = NewArchiveInput {
+                    resource_type: "analysis".to_string(),
+                    name: request.name.trim().to_string(),
+                    alias: None,
+                    kind: ArchiveKind::AnalyticsTable,
+                    content_hash: manifest.manifest_id.clone(),
+                    definition_sql: None,
+                    row_count: Some(clamp_i32(manifest.row_count)),
+                    column_count: Some(clamp_i32(manifest.column_count)),
+                    file_rel_path: String::new(),
+                    payload_mode: PayloadMode::Copy,
+                    source_path: None,
+                    file_size: None,
+                    structured: true,
+                    binding: ArchiveBinding {
+                        promoted_from: None,
+                        source_connection_id: None,
+                        source_table: Some(format!("{source_schema}.{source_table}")),
+                    },
+                    scope: "project".to_string(),
+                };
+                let created = store
+                    .insert_table_asset_with_version(
+                        input,
+                        &snapshot.physical_table,
+                        &manifest,
+                        &snapshot,
+                        Some(&detail),
+                    )
+                    .await?;
+                Ok(ArchiveTableOutcome {
+                    resource_id: created.id,
+                    name: created.name,
+                    version: created.version,
+                    snapshot_id: snapshot.snapshot_id,
+                    manifest_id: manifest.manifest_id,
+                    created_new_version: true,
+                    source_consumed: false,
+                })
             }
         }
-        None => {
-            if request.name.trim().is_empty() {
-                return Err(user_err("新表资产需要显示名"));
+    }
+    .await;
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            // 物理快照先于元数据落库：元数据事务失败时，这张表不会被 `table_snapshots`
+            // 引用，GC 也看不到它。只清本次新建的那张，复用快照不受影响。
+            if let Some(table) = created_physical {
+                drop_table_best_effort(duckdb, "rds_archive", &table).await;
             }
-            let detail = format!("归档普通表 {source_schema}.{source_table}");
-            let input = NewArchiveInput {
-                resource_type: "analysis".to_string(),
-                name: request.name.trim().to_string(),
-                alias: None,
-                kind: ArchiveKind::AnalyticsTable,
-                content_hash: manifest.manifest_id.clone(),
-                definition_sql: None,
-                row_count: Some(clamp_i32(manifest.row_count)),
-                column_count: Some(clamp_i32(manifest.column_count)),
-                file_rel_path: String::new(),
-                payload_mode: PayloadMode::Copy,
-                source_path: None,
-                file_size: None,
-                structured: true,
-                binding: ArchiveBinding {
-                    promoted_from: None,
-                    source_connection_id: None,
-                    source_table: Some(format!("{source_schema}.{source_table}")),
-                },
-                scope: "project".to_string(),
-            };
-            let created = store
-                .insert_table_asset_with_version(
-                    input,
-                    &snapshot.physical_table,
-                    &manifest,
-                    &snapshot,
-                    Some(&detail),
-                )
-                .await?;
-            ArchiveTableOutcome {
-                resource_id: created.id,
-                name: created.name,
-                version: created.version,
-                snapshot_id: snapshot.snapshot_id,
-                manifest_id: manifest.manifest_id,
-                created_new_version: true,
-                source_consumed: false,
-            }
+            return Err(error);
         }
     };
 
@@ -833,6 +861,112 @@ mod tests {
             asset_id: None,
             consume_source: true,
         }
+    }
+
+    #[tokio::test]
+    async fn same_name_without_asset_id_refuses_to_append_a_different_source() {
+        let env = env("ta_identity").await;
+        exec(
+            &env.duckdb,
+            "CREATE TABLE main.orders AS SELECT 1::BIGINT AS id, 'a'::VARCHAR AS side;",
+        )
+        .await;
+        let first = archive_table(&env.store, &env.duckdb, &archive_request("订单", "orders"))
+            .await
+            .expect("first archive");
+
+        exec(
+            &env.duckdb,
+            "CREATE TABLE main.orders_v2 AS SELECT 1::BIGINT AS id, 'b'::VARCHAR AS side;",
+        )
+        .await;
+        let error = archive_table(&env.store, &env.duckdb, &archive_request("订单", "orders_v2"))
+            .await
+            .expect_err("同名但未指定 asset_id 必须拒绝");
+        assert!(
+            error.to_string().contains("asset_id"),
+            "错误要告诉调用方显式指定资产 id，实际：{error}"
+        );
+        assert!(
+            env.store
+                .table_asset_version(&first.resource_id, 2)
+                .await
+                .expect("read versions")
+                .is_none(),
+            "不得把不同源表静默接成 v2"
+        );
+        cleanup(env);
+    }
+
+    #[tokio::test]
+    async fn metadata_failure_drops_the_physical_snapshot_created_by_this_call() {
+        let env = env("ta_physics_rollback").await;
+        exec(
+            &env.duckdb,
+            "CREATE TABLE main.orders AS SELECT 1::BIGINT AS id, 'a'::VARCHAR AS side;",
+        )
+        .await;
+        let first = archive_table(
+            &env.store,
+            &env.duckdb,
+            &archive_request("回滚表", "orders"),
+        )
+        .await
+        .expect("archive v1");
+
+        // 换一份内容（manifest 不同），再让版本行 v2 提前存在：下一次归档算出的
+        // v2 会撞唯一约束，元数据事务失败，但物理快照在这之前已经建好了。
+        exec(
+            &env.duckdb,
+            "CREATE TABLE main.orders AS SELECT 2::BIGINT AS id, 'b'::VARCHAR AS side;",
+        )
+        .await;
+        {
+            let conn = env.manager.sqlite_pool().acquire().await.expect("sqlite conn");
+            conn.inner()
+                .expect("sqlite inner")
+                .execute(
+                    "INSERT INTO table_asset_versions \
+                     (asset_id, version, snapshot_id, manifest_id, parent_version, created_at) \
+                     VALUES (?1, 2, ?2, ?3, 1, '2026-11-27T00:00:00Z')",
+                    rusqlite::params![
+                        &first.resource_id,
+                        &first.snapshot_id,
+                        &first.manifest_id,
+                    ],
+                )
+                .expect("seed conflicting v2 row");
+        }
+        let before = query_count(
+            &env.duckdb,
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'rds_archive'",
+        )
+        .await;
+
+        let request = ArchiveTableRequest {
+            name: "回滚表".to_string(),
+            source_schema: "main".to_string(),
+            source_table: "orders".to_string(),
+            asset_id: Some(first.resource_id.clone()),
+            consume_source: false,
+        };
+        let error = archive_table(&env.store, &env.duckdb, &request)
+            .await
+            .expect_err("预占 v2 必须让元数据提交失败");
+        assert!(
+            error.to_string().contains("版本 2") || error.to_string().contains("重复提交"),
+            "失败要指向版本冲突：{error}"
+        );
+        assert_eq!(
+            query_count(
+                &env.duckdb,
+                "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'rds_archive'",
+            )
+            .await,
+            before,
+            "本次新建的物理快照必须被补偿删除"
+        );
+        cleanup(env);
     }
 
     #[tokio::test]
