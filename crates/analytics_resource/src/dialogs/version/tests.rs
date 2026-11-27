@@ -57,6 +57,35 @@ fn action_carries_its_version() {
 }
 
 #[test]
+fn global_scope_restore_ignores_project_read_only_but_project_scope_does_not() {
+    use super::render::can_apply_version;
+
+    let historical = row(1, false);
+    assert!(
+        can_apply_version(&historical, false, true, true),
+        "全局实例的还原写全局库，项目只读不该挡"
+    );
+    assert!(
+        !can_apply_version(&historical, false, true, false),
+        "项目 scope 的还原仍是写操作，只读必须挡"
+    );
+    assert!(
+        !can_apply_version(&row(2, true), false, false, true),
+        "当前版本没有可还原的历史内容"
+    );
+    let mut pruned = row(1, false);
+    pruned.has_copy = false;
+    assert!(
+        !can_apply_version(&pruned, false, false, true),
+        "内容已裁除的版本不能还原"
+    );
+    assert!(
+        !can_apply_version(&historical, true, false, true),
+        "动作进行中要置灰，避免连点生成两个版本"
+    );
+}
+
+#[test]
 fn diff_base_toggles_and_clears_with_rows() {
     let state = VersionDialogState::new();
     state.set_rows(vec![row(3, true), row(2, false), row(1, false)]);

@@ -90,6 +90,8 @@ impl SidebarPanel {
         resource_id: &str,
         name: &str,
         action: VersionAction,
+        global: bool,
+        global_table: bool,
         cx: &mut Context<Self>,
     ) {
         let read_only = self.shared.project_ui.borrow().read_only;
@@ -102,6 +104,26 @@ impl SidebarPanel {
         if let VersionAction::Diff { version, against } = action {
             resource_jobs::enqueue_version_diff(root, resource_id.to_string(), version, against);
             self.ensure_resources_pump(cx);
+            return;
+        }
+        // 全局 scope：对比照常；历史版本恢复写的是全局实例，项目只读不挡。
+        // 取回 / 分析 / 固化都只在项目侧有落点，全局对话框不提供（UI 已禁用，这里兜底）。
+        if global {
+            if let VersionAction::Restore { version } = action {
+                resource_jobs::enqueue_restore_global_version(
+                    root,
+                    name.to_string(),
+                    version,
+                    global_table,
+                );
+                self.ensure_resources_pump(cx);
+                return;
+            }
+            self.finish_version_action(
+                "全局实例的版本历史只支持对比与恢复；取回 / 分析 / 固化请在项目实例里操作"
+                    .to_string(),
+                cx,
+            );
             return;
         }
         // 「用 vN 分析」也是**只读查看**：把历史副本挂成分析视图（本体与版本都不动），

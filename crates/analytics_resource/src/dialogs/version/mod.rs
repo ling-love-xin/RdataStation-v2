@@ -90,9 +90,9 @@ pub struct VersionDialogState {
     diff_base: Rc<RefCell<Option<i32>>>,
     /// 动作进行中：按钮一律置灰（避免连点两次还原，那会连着生成两个版本）。
     busy: Rc<Cell<bool>>,
-    /// 项目只读：三个动作全部置灰（判定与面板 / 详情同一口径：由宿主机注入）。
+    /// 项目只读：项目 scope 的写动作置灰；全局 scope 的还原写全局库，不受它影响。
     read_only: Rc<Cell<bool>>,
-    /// 全局实例行：本地没有副本，动作栏额外抑制「用 vN 分析」（它按项目表名路由）。
+    /// 全局实例行：动作栏只留对比与还原，抑制「用 vN 分析」/ 取回 / 固化（它们按项目侧路由）。
     global_scope: Rc<Cell<bool>>,
     /// 动作期间的提示（"正在还原 v1…"）；`None` = 不显示。
     note: Rc<RefCell<Option<String>>>,
@@ -203,7 +203,7 @@ impl VersionDialogState {
         self.read_only.get()
     }
 
-    /// 打开前由宿主告知这是全局实例行（动作栏只保留对比，不摆项目侧动作）。
+    /// 打开前由宿主告知这是全局实例行（动作栏只保留对比与还原，不摆项目侧动作）。
     pub fn set_global_scope(&self, global_scope: bool) {
         self.global_scope.set(global_scope);
     }

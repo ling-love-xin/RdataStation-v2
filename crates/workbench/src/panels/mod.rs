@@ -189,9 +189,17 @@ impl SidebarPanel {
         };
         let read_only = self.shared.project_ui.borrow().read_only;
         let state = VersionDialogState::new();
-        state.set_read_only(read_only || rows.global);
+        // 全局 scope 不等于“项目只读”：全局还原写的是全局实例，项目只读不该挡它。
+        state.set_read_only(read_only);
         state.set_global_scope(rows.global);
         state.set_rows(rows.seed.rows.clone());
+        let global = rows.global;
+        let global_table = rows
+            .seed
+            .rows
+            .first()
+            .map(|row| row.is_table)
+            .unwrap_or(false);
 
         let resource_id = rows.resource_id.clone();
         let name = rows.seed.name.clone();
@@ -216,7 +224,14 @@ impl SidebarPanel {
                 let resource_id = resource_id.clone();
                 let name = name.clone();
                 entity.update(cx, |this, cx| {
-                    this.request_version_action(&resource_id, &name, action, cx)
+                    this.request_version_action(
+                        &resource_id,
+                        &name,
+                        action,
+                        global,
+                        global_table,
+                        cx,
+                    )
                 });
             },
             move |_cx| {

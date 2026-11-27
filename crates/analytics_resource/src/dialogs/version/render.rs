@@ -272,6 +272,19 @@ pub(super) fn version_rail(
     rail
 }
 
+/// 选中行能不能执行写动作（还原 / 回退）。
+///
+/// 全局 scope 的还原写全局实例，项目只读不挡它；项目 scope 仍按只读收口。
+/// 当前版本就是本体、没有副本的历史版本也裁掉了内容，都不给动。
+pub(super) fn can_apply_version(
+    row: &VersionRow,
+    busy: bool,
+    read_only: bool,
+    global_scope: bool,
+) -> bool {
+    !row.is_current && row.has_copy && !busy && (global_scope || !read_only)
+}
+
 /// 动作栏：选中一行后才出现（原型 §4.3 的取舍：表格装不下每行三个按钮）。
 ///
 /// `base` 是 Shift+点选的对比基准行；有它时「对比」改成「与基准 vN 对比」，
@@ -288,7 +301,8 @@ pub(super) fn action_bar(
     let muted = theme.colors.muted_foreground;
     let version = row.version;
     // 当前版本不走这两个动作（它就是本体）：取回走详情面板的「取回（检出）…」。
-    let can_act = !row.is_current && row.has_copy && !busy && !read_only;
+    // 全局 scope 的恢复写的是全局实例，项目只读不挡；取回 / 分析 / 固化另判。
+    let can_act = can_apply_version(row, busy, read_only, state.global_scope());
     // 对比是**只读查看**（不写库，只读项目也能看），只要求两侧内容还在；
     // 文件的大小上限由宿主在取数线程挡，表则由快照读取链路挡（对话框不查文件系统）。
     // 有基准时两侧都必须是可读版本（当前版本读本体 / 当前表快照，也算可读）。
@@ -306,8 +320,8 @@ pub(super) fn action_bar(
         !busy && !row.is_current && row.has_copy && !row.is_table && !state.global_scope();
     // 引用资产没有本地副本，只有「固化」：复制 pin 住的全局版本为独立本地表。
     let can_solidify = row.is_global_ref && !busy && !read_only;
-    // 取回基于 `resources/` 下的本体，表型资产没有。
-    let can_checkout = can_act && !row.is_table;
+    // 取回基于 `resources/` 下的本体，表型资产没有；全局 scope 没有项目侧落点。
+    let can_checkout = can_act && !row.is_table && !state.global_scope();
     let hint = if base.is_some() {
         if !selected_diffable {
             "选中的这一版没有可读内容（内容已裁除），Shift+点另一行换一个对比版本"
@@ -317,7 +331,7 @@ pub(super) fn action_bar(
             "这个基准没有可读内容（内容已裁除），Shift+点另一行换一个基准"
         }
     } else if state.global_scope() {
-        "这是全局实例的版本历史（只读）：可以 Shift+点另一行做版本对比；还原 / 取回 / 固化都只在项目实例里进行"
+        "这是全局实例的版本历史：可把选中的历史版本恢复成新版本（旧版本保留）；Shift+点另一行做对比。取回 / 分析 / 固化只在项目实例里进行"
     } else if row.is_global_ref {
         if read_only {
             "项目处于只读模式：固化会往本项目库写一张新表，需要先退出只读"
