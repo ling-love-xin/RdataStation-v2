@@ -158,6 +158,11 @@ struct SourceIntent { id, origin, alias, auto_attach: bool, primary: bool }
 - 小标只表达一件事：`可解析` / `意向未生效（原因）` / `可加入`；连接健康度用行首图标，不塞小标。
 - 实现落点（K2 首刀已落）：会话行**归属连接在清单里**时并入该连接行（挂载事实与失败原话一并搬过去）；
   会话行只在「说不出归属」（没有 `conn_id` 的老调用方）时兜底各出一行，身份才带 owner。
+- 实现落点（K2 后半已落，2026-11-27）：段维度落在 `Object::source_section()`——判据只有
+  「此刻能不能解析到表」（`State::Ready` → **参与分析**，其余含已卸载底座 → **可加入**），
+  业务身份不参与；`Object::rank()` 改成 可解析（0 会话源 / 1 底座 / 2 已挂载连接）→ 尚未生效（3）。
+  渲染只在切段处插一条轻量子标题（`data-objects-section-*`），**折叠粒度仍是「源 / 表 / 文件」三段**
+  （把折叠键一起拆细会让已有折叠状态全部失效，收益不值）。
 
 ---
 
@@ -180,7 +185,7 @@ struct SourceIntent { id, origin, alias, auto_attach: bool, primary: bool }
 | **K0a** ✅ | `catalog.rs`：`CatalogOrigin/Holder/State/Info` + `snapshot()`；`file_view` 加路径索引（两写入口） | **零**（只新增 API） | `cargo check -p rds-engine`；三个纯函数单测（同行合并 / 失败不被盖 / 底座不算源） |
 | **K0b** ✅ | 面板读文件索引取代 `Shared.loaded_files`；该字段整条删除（不留兼容层）；指纹里删掉空的「洞察样本」维度 | 零（输出逐字不变） | `cargo check -p rds-workbench --lib/--tests` 通过；文件索引逐条清理（删视图即忘） |
 | **K1** ✅ | 抽取 `rds-sql::table_paths`（递归全树、CTE/派生表/表函数排除）+ 判定 `editor::exec::preflight`（不存在 / 多源歧义给候选 / 未知 catalog / 源不可用）；联邦与加速两档发送前过闸 | 报错更早更准 | 表驱动：`rds-sql` 9 条抽取 + `editor` 13 条判定（含主源优先、内置库不参与歧义） |
-| K2（进行中） | 面板改"源记录 + 可用性分段"，会话行并入。首刀：会话源带 `conn_id`，归属连接在清单里 → 并入连接行（含失败原话）；无归属会话行才兜底 | 重复行消失（已有性质测试「同连接两文档 = 一行」） | 待做：两段分组（可解析 / 意向未生效 / 可加入） |
+| K2（已落两刀） | 面板改"源记录 + 可用性分段"，会话行并入。首刀：会话源带 `conn_id`，归属连接在清单里 → 并入连接行（含失败原话）；无归属会话行才兜底。次刀：源段按可用性分两段（`source_section` + rank 0–2 / 3），渲染插子标题 | 重复行消失；"可解析 / 可加入"在界面上分开 | 面板 50 条（含「同连接两文档 = 一行」「分段序不许插回」） |
 | K3（进行中） | 意图清单 replay + 主源持久化；引用计数拒绝 DETACH。**已落两刀（2026-11-27）**：① 别名冲突改拒绝（`MountRegistry::reserve` 报错并点名占用者，同源重挂幂等）；② 主源持久化（`analysis_primary` 单行表 + 036；`publish_project` 发布两张快照；`apply_registered_primary` 让登记主源赢过文档连接，会话重建即 replay） | 重启不丢主源；冲突从静默改名变报错 | K3①：engine lib 355 passed；K3②：store 13 条 / editor 组装 18 条全过。待做：引用计数拒绝 DETACH；headless probe（restart 后 catalog 与 primary 恢复） |
 
 K0a 是唯一前置，且行为零变化，可先合。
