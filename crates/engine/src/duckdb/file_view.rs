@@ -320,7 +320,16 @@ pub fn detach_database(conn: &Connection, alias: &str) -> Result<(), CoreError> 
 }
 
 /// 在进程单例上卸载 catalog（事件路径调用）
+///
+/// **引用计数拒绝（不变量 §6）**：还有文档会话挂着这个别名时不许摘——`ATTACH` 是实例级事实，
+/// 摘了那些文档会当场报 catalog 不存在，正在跑的查询也会断。检查是纯内存读，先于拿连接锁。
 pub fn detach_database_global(alias: &str) -> Result<(), CoreError> {
+    if let Some(instance) = crate::duckdb::instance::current() {
+        let holders = instance.catalog_holders(alias, &[]);
+        if let Some(refusal) = crate::duckdb::instance::detach_refusal(alias, &holders) {
+            return Err(CoreError::common(CommonError::General(refusal)));
+        }
+    }
     let conn = crate::duckdb::manager::DuckDBManager::global()
         .lock()
         .map_err(|_| CoreError::common(CommonError::General("内存库连接锁被污染".to_string())))?;

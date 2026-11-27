@@ -118,7 +118,7 @@ fn remount(session: &rds_engine::duckdb::instance::AnalysisSession, source: &Acc
 
 fn unmount(conn_id: &str) {
     if let Some(instance) = rds_engine::duckdb::instance::current() {
-        let _ = instance.unmount_conn(conn_id);
+        let _ = instance.unmount_conn(conn_id, None);
     }
 }
 

@@ -450,9 +450,12 @@ pub fn mount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
 }
 
 /// 卸下一条网络连接在**分析实例**上的挂载（源段右键「卸载」）：只断挂载，不动连接本身。
+///
+/// 面板不代表任何文档会话（`acting = None`）：只要还有文档在用它，`unmount_conn` 会拒绝
+/// 并把「谁在用」写进错误原话，这里原样弹给用户（别吞成"卸载失败"）。
 pub fn unmount_network_source(shared: &Shared, conn_id: &str, cx: &mut App) {
     let outcome = engine::duckdb::instance::current()
-        .map(|instance| instance.unmount_conn(conn_id))
+        .map(|instance| instance.unmount_conn(conn_id, None))
         .unwrap_or(Ok(false));
     match outcome {
         Ok(true) => {

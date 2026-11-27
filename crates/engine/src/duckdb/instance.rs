@@ -243,6 +243,36 @@ fn valid_alias(alias: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+/// 引用计数：从「会话 owner + 标签 + 它持有的别名」里挑出持有目标的那些（纯函数，便于断言）。
+///
+/// 返回**标签**而不是 owner：错误的读者是用户，`doc-7f3a…` 这种 id 帮不上忙。
+fn holders_of(
+    alias: &str,
+    except: &[&str],
+    sessions: &[(String, String, Vec<String>)],
+) -> Vec<String> {
+    sessions
+        .iter()
+        .filter(|(owner, _, _)| !except.iter().any(|skip| skip == owner))
+        .filter(|(_, _, aliases)| aliases.iter().any(|seen| seen == alias))
+        .map(|(_, label, _)| label.clone())
+        .collect()
+}
+
+/// 卸载前的闸：有人持有就给出错误话术（`None` = 放行）。
+///
+/// 点睛之处是把「谁在用」写进原话（`编辑器 · 分析.sql` 这类 owner）：只说"正被使用"
+/// 用户不知道去关哪个。不变量 §6：有人持有就拒绝，不静默打断正在跑的查询。
+pub(crate) fn detach_refusal(alias: &str, holders: &[String]) -> Option<String> {
+    (!holders.is_empty()).then(|| {
+        format!(
+            "{alias} 正被 {} 个文档会话使用（{}）：先关掉它们，或在那些文档里卸掉这条源",
+            holders.len(),
+            holders.join("、")
+        )
+    })
+}
+
 fn instance_slot() -> &'static Mutex<Option<Arc<AnalysisInstance>>> {
     INSTANCE.get_or_init(|| Mutex::new(None))
 }
@@ -732,22 +762,34 @@ impl AnalysisInstance {
 
     /// 卸下某个源连接的挂载（面板右键「卸载」）：`DETACH` + 放别名 + 关它在实例上的会话。
     ///
+    /// `acting` = 谁在发起：`None` 表示不代表任何文档会话（面板/项目意图层），此时
+    /// **凡有文档会话挂着的别名一律拒绝**；`Some(owner)` 表示某个文档会话替自己卸，
+    /// 它自己的会话不算持有者（否则自己挂着就永远卸不掉）。
+    ///
     /// 只断挂载，不动连接本身；返回 `false` = 这个源本来就没挂（调用方据此提示）。
+    ///
+    /// **引用计数拒绝（不变量 §6，2026-11-27）**：还有别的文档会话挂着它（挂着 = `mounted_sources`
+    /// 里有 Ready 记录）时**拒绝卸载并点名**——`ATTACH` 是实例级事实，摘掉会让那些文档当场
+    /// 报 catalog 不存在，还会打断正在跑的查询。加速档自己的会话（`accel:<conn_id>`）恒不算持有者。
     ///
     /// 2026-11-27：卸完还要**收拾悬空会话**——凡是以它为「主源」的会话，`USE <别名>` 指向的
     /// catalog 已经没了，之后任何未限定名的查询都会报 catalog 不存在。这里逐个重建默认路径
     /// （[`AnalysisSession::reset_search_path`] 发现主源不在会清记录并退回 `memory`），
     /// 并把该别名从各会话的挂载记录里摘掉（面板「会话源」跟着少一行）。
-    pub fn unmount_conn(&self, conn_id: &str) -> Result<bool, String> {
+    pub fn unmount_conn(&self, conn_id: &str, acting: Option<&str>) -> Result<bool, String> {
         let Some(alias) = self.alias_for_conn(conn_id) else {
             return Ok(false);
         };
-        let valid = !alias.is_empty()
-            && alias
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-        if !valid {
+        if !valid_alias(&alias) {
             return Err(format!("别名 {alias:?} 里有不允许的字符，拒绝拿去拼 SQL"));
+        }
+        // 引用计数闸：有人还在用就不摘（先把"谁在用"说清，别静默打断）
+        let accel = Self::accel_owner(conn_id);
+        let mut except = vec![accel.as_str()];
+        except.extend(acting);
+        let holders = self.catalog_holders(&alias, &except);
+        if let Some(refusal) = detach_refusal(&alias, &holders) {
+            return Err(refusal);
         }
         {
             let conn = self
@@ -797,6 +839,29 @@ impl AnalysisInstance {
             }
         }
         Ok(true)
+    }
+
+    /// 此刻正持有某别名的会话 owner 列表（**引用计数的读口**，不变量 §6）。
+    ///
+    /// `except` 排除不算持有者的会话（加速档自己的 `accel:<conn_id>`、以及发起卸载的那个文档会话）。
+    /// 只数 **Ready** 的挂载记录：失败记录没有 `search_path` 指向它，不算"在用"。
+    pub fn catalog_holders(&self, alias: &str, except: &[&str]) -> Vec<String> {
+        let mut sessions: Vec<(String, String, Vec<String>)> = Vec::new();
+        for info in self.sessions() {
+            let aliases = self
+                .session(&info.id)
+                .map(|session| {
+                    session
+                        .mounted_sources()
+                        .into_iter()
+                        .filter(|entry| entry.is_ready())
+                        .map(|entry| entry.alias().to_string())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            sessions.push((info.owner, info.label, aliases));
+        }
+        holders_of(alias, except, &sessions)
     }
 
     /// 某个源连接此刻挂在实例上的别名（**纯内存读**；没挂过就是 `None`）。
@@ -1408,6 +1473,47 @@ mod tests {
         AnalysisInstance::open_tagged(tag, Duration::from_millis(3000)).expect("开实例")
     }
 
+    /// 引用计数（不变量 §6）：只数「真挂着」的会话，排除发起卸载者；有人持有时话术要点名。
+    #[test]
+    fn holders_count_only_the_sessions_that_really_hold_the_alias() {
+        let sessions = vec![
+            (
+                "doc-a".to_string(),
+                "编辑器 · 分析.sql".to_string(),
+                vec!["shop".to_string()],
+            ),
+            (
+                "doc-b".to_string(),
+                "编辑器 · 报表.sql".to_string(),
+                vec!["warehouse".to_string()],
+            ),
+            (
+                "accel:C1".to_string(),
+                "加速档 C1".to_string(),
+                vec!["shop".to_string()],
+            ),
+        ];
+        assert_eq!(
+            holders_of("shop", &["accel:C1"], &sessions),
+            ["编辑器 · 分析.sql".to_string()],
+            "发起者自己的会话要排除，没挂它的会话不算；返回标签而不是 owner id"
+        );
+        assert_eq!(holders_of("shop", &[], &sessions).len(), 2);
+        assert!(holders_of("gone", &[], &sessions).is_empty());
+
+        let holders = holders_of("shop", &[], &sessions);
+        let refusal = detach_refusal("shop", &holders).expect("有人持有必须拒");
+        assert!(refusal.contains("2 个文档会话"), "{refusal}");
+        assert!(
+            refusal.contains("编辑器 · 分析.sql") && refusal.contains("加速档 C1"),
+            "要点名谁在用，用户才知道去关哪个：{refusal}"
+        );
+        assert!(
+            detach_refusal("shop", &[]).is_none(),
+            "没人持有要放行（别把正常卸载也拦下）"
+        );
+    }
+
     /// D17：`accel:` 键只有一处来源；残键 `accel:`（空连接 id）不算加速 owner。
     #[test]
     fn accel_owner_key_is_single_sourced() {
@@ -1610,7 +1716,22 @@ mod tests {
         session.use_catalog("fed_a").expect("设主源");
         assert_eq!(session.primary_alias().as_deref(), Some("fed_a"));
 
-        assert!(instance.unmount_conn("conn-a").expect("卸载"));
+        // 面板（不代表任何文档会话）来卸：该会话正挂着它 → 必须拒绝并点名
+        let refusal = instance
+            .unmount_conn("conn-a", None)
+            .expect_err("面板卸载要过引用计数闸");
+        assert!(refusal.contains("1 个文档会话"), "{refusal}");
+        assert!(refusal.contains("编辑器"), "要点名谁在用：{refusal}");
+        assert_eq!(
+            session.primary_alias().as_deref(),
+            Some("fed_a"),
+            "被拒之后状态不许变"
+        );
+
+        // 该文档会话自己来卸：它自己的会话不算持有者 → 放行
+        assert!(instance
+            .unmount_conn("conn-a", Some("doc-a"))
+            .expect("自己的会话发起要放行"));
         assert_eq!(session.primary_alias(), None, "主源记录该清掉");
         assert!(
             session.mounted_sources().is_empty(),
