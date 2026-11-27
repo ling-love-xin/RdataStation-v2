@@ -4,6 +4,7 @@
 //! 字段 `pub(crate)` 供同 crate 各 impl 共享（2026-10-29 拆分，零逻辑改动）。
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -364,6 +365,18 @@ pub struct ResultGridDelegate {
     /// 所以这里镜像一个行号，由 `table_impl.rs` 的 `render_tr` 在行容器上铺一档与单元格
     /// 选中同槽的底色（`tokens.table_active`）。
     pub(crate) selected_row: Option<usize>,
+    /// 【行号槽宽】按可见行号实测宽撑出来的槽宽（`None` = 还没量过，用常量下限）
+    ///
+    /// 真值 `LightGrid.computeHeaderSizes:1884-1897`：逐行量 `computeHeaderWidth`
+    /// （`GridRowRenderer:114-128` = 左右内距 + 三角盒 + 文本宽 + 层级缩进）取最大，
+    /// clamp 到 MIN 40 / MAX 400，**只在变大时**改。本仓的 MIN 是常量 48（
+    /// [`crate::ui::RESULT_ROW_NUMBER_WIDTH`]，1–2 位行号不缩），只在需要更宽时改写这里。
+    ///
+    /// 为什么不做成「遍历所有行」：那样在百万行结果上等价于 O(行数) 的全表扫描，而真值
+    /// 是在 `computeHeaderSizes` 里顺手做（每次滚动/列宽变化都跑），本仓取
+    /// `visible_rows_changed` 这一处（视口容量几十行）+ 「只增不减」的单调收敛：
+    /// 滚到 4 位数那一屏时槽宽长到够，滚回顶部仍保持（与真值 `:1895` 同口径）。
+    pub(crate) row_number_width: Option<Pixels>,
     /// 【D10】矩形单元格选区（视图坐标：行 = 视图行序，列 = 组件列下标，含行号槽）。
     ///
     /// 组件只记得**一个**选中格（`TableSelection::Cell`），它铺的高亮也只覆盖那一格
@@ -395,6 +408,97 @@ impl ResultGridDelegate {
     /// 【选中行】当前镜像的整行选中（视图行序）；`render_tr` 与用例读它。
     pub fn selected_view_row(&self) -> Option<usize> {
         self.selected_row
+    }
+
+    /// 行号槽该多宽：量过就用量出来的，没量过（或算出来更窄）用常量下限
+    ///
+    /// 下限 [`crate::ui::RESULT_ROW_NUMBER_WIDTH`] 恒生效 = 「只增不减」的另一种写法：
+    /// 1–2 位行号仍 48（真值 40–47，差 ≤8px 已登记），≥3 位才长到装得下。
+    pub(crate) fn row_number_width(&self) -> Pixels {
+        self.row_number_width
+            .unwrap_or(crate::ui::RESULT_ROW_NUMBER_WIDTH)
+            .max(crate::ui::RESULT_ROW_NUMBER_WIDTH)
+    }
+
+    /// 由「行号文本实测宽」算槽宽（纯函数，clamp 到常量下限 / 真值上限 400）
+    ///
+    /// 构成照抄真值 `GridRowRenderer.computeHeaderWidth:114-128`：
+    /// `LEFT_MARGIN + RIGHT_MARGIN + (EXPANDED_BOUNDS.width + EXPANDER_SPACING) + 文本宽`。
+    /// 三角盒这里**恒算**：本仓槽里的三角是条件渲染（只有顶层数组行才有），但槽宽不能
+    /// 随行抖动；真值对不可展开行不加那 18px，差值落在下限兜底里，不改变结果。
+    ///
+    /// 抽成纯函数是为了能被用例直接钉（headless 的 `NoopTextSystem`
+    /// 让真实测宽恒为 0，见 `platform/test/platform.rs:2/139`）。
+    pub(crate) fn row_number_width_for_text(text_width: Pixels) -> Pixels {
+        let chrome = crate::ui::RESULT_ROW_HEAD_MARGIN_X * 2.
+            + crate::ui::RESULT_ROW_EXPANDER_SIZE
+            + crate::ui::RESULT_ROW_EXPANDER_SPACING;
+        (chrome + text_width)
+            .max(crate::ui::RESULT_ROW_NUMBER_WIDTH)
+            .min(crate::ui::RESULT_ROW_NUMBER_MAX_WIDTH)
+    }
+
+    /// 量可见行的行号文本，取最宽的，折算成槽宽
+    ///
+    /// 文本宽走 `window.text_system().shape_line`，与渲染同字体同字号
+    /// （`text_xs` = 0.75 rem，见 [`crate::ui::RESULT_ROW_LABEL_FONT_SCALE`]）——不是
+    /// 「按位数乘平均字宽」那种自创口径。只量传入的区间（视口容量几十行）。
+    pub(crate) fn required_row_number_width(
+        &self,
+        visible: Range<usize>,
+        window: &mut Window,
+        cx: &App,
+    ) -> Pixels {
+        use gpui_kit::component::ActiveTheme as _;
+        let theme = cx.theme();
+        let font = Font {
+            family: theme.font_family.clone(),
+            ..Default::default()
+        };
+        let font_size = theme.font_size * crate::ui::RESULT_ROW_LABEL_FONT_SCALE;
+        let color = theme.colors.foreground;
+        let mut widest = Pixels::ZERO;
+        for row_ix in visible {
+            let label = self.row_label(row_ix);
+            let run = TextRun {
+                len: label.len(),
+                font: font.clone(),
+                color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let width = window
+                .text_system()
+                .shape_line(label.into(), font_size, std::slice::from_ref(&run), None)
+                .width();
+            if width > widest {
+                widest = width;
+            }
+        }
+        Self::row_number_width_for_text(widest)
+    }
+
+    /// 记下「这一屏需要多宽」，只在变宽时写回；返回是否真的改了
+    /// （调用方据此 `cx.notify()`，避免每帧都触发重排）
+    pub(crate) fn note_row_number_width(&mut self, required: Pixels) -> bool {
+        if required > self.row_number_width() {
+            self.row_number_width = Some(required);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 可见行出现更长的行号时把行号槽跟上（只增不减）；返回是否真的改了
+    pub(crate) fn grow_row_number_width(
+        &mut self,
+        visible: Range<usize>,
+        window: &mut Window,
+        cx: &App,
+    ) -> bool {
+        let required = self.required_row_number_width(visible, window, cx);
+        self.note_row_number_width(required)
     }
 
     /// 【D10】一次单元格点击 → 更新矩形选区（DBeaver `updateCellSelection` 的点击档，
@@ -1234,6 +1338,8 @@ impl ResultGridDelegate {
         // `clearGrouping` / 重新取数都会把选区的 `selectedCells` 清掉）
         self.cell_range = None;
         self.selected_row = None;
+        // 【行号槽宽】新结果集有自己的行数区间，上一份量出来的宽度不带过来
+        self.row_number_width = None;
     }
 
     /// 【B14】记下最近右键的单元格（由 `render_td` 上的右键处理调用）

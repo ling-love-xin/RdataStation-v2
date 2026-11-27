@@ -96,7 +96,9 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // 同一批 `RESULT_HEADER_COMMENT_ROW_HEIGHT` 40 → 50（两行 = 28 + 6 + 16）、
     // `RESULT_FIT_HEADER_CHROME` 57 → 61 与 `RESULT_FIT_HEADER_SIDES` 16 → 20（表体档
     // `Size::Size` 落 `table_cell_padding()` 的 Medium 分支，`offset_pr` 4 → 8）。
-    ("crates/result_panel/src/ui.rs", 0, 30),
+    // 2026-11-27 30 → 31：行号槽宽改「按行号文本实测宽只增不减」，
+    // `RESULT_ROW_NUMBER_MAX_WIDTH = px(400.)`（真值 `LightGrid.java:74` 的 `MAX_ROW_HEADER_WIDTH`）。
+    ("crates/result_panel/src/ui.rs", 0, 31),
     ("crates/settings/src/skeleton.rs", 0, 1),
     ("crates/workbench/src/components/dialog_helpers.rs", 0, 1),
     (

@@ -3041,7 +3041,8 @@ DBeaver 清空后回空态；本仓没有「无分组键」态（`group_columns`
 #### 8.52.3 测试口径调整
 
 - `cells_stretch_to_the_column_boundary_for_grid_lines` 追加表头断言：
-  行号列表头宽 ≥ `RESULT_ROW_NUMBER_WIDTH - 9px`（列宽 48 − 组件右内距 8，容差 1px）；
+  行号列表头宽 ≥ `RESULT_ROW_NUMBER_WIDTH - 9px`（列宽 48 − 组件右内距 8，容差 1px；
+  2026-11-27 起 48 只是**下限**，行号装不下时列更宽，这条下界仍然成立）；
   数据列表头的 `left()` 比行号列表头右移 ≥ `RESULT_ROW_NUMBER_WIDTH - 1px`（= 表头竖线与
   数据区竖线同一条 x）。
   **不能用表头格的宽度当基准**（它是 108 而不是 128，见修正 1；2026-11-27 复核后是
@@ -10578,10 +10579,12 @@ element 是 `Collection` 就返回 `col.toArray()`）。
    文本，解析失败按普通文本画。
 4. **子行元素对齐**：按列 `Array` → 文本族左对齐，不按元素自身数值类型右对齐。
 5. **深层子行没有缩进、行号槽也不给三角**：真值 `GridRowRenderer:73-86` 按 `LEVEL_SPACING`
-   （= 图标宽）逐级右移行头三角与行号，且每层行头都有展开三角；本仓行号槽固定 48px、
-   槽内只画一个三角且只对底层数据行生效（子行的展开靠「单元格内的三角」，真值无这一层），
-   层级只体现在行号文本（`1.1.1`）上。逐级缩进需要行号槽按层级加宽，与固定槽宽冲突，
-   暂不做。（原记的「二级展开未做」已在 2026-11-27 补齐，见 §9.70.3。）
+   （= 图标宽）逐级右移行头三角与行号，且每层行头都有展开三角；本仓槽内只画一个三角且只对
+   底层数据行生效（子行的展开靠「单元格内的三角」，真值无这一层），层级只体现在行号文本
+   （`1.1.1`）上。**槽宽本身已能装下带点子行标签**（2026-11-27 起按实测文本宽撑开，
+   见 §20.8.8），剩的差异是「不按 `level` 逐级右移」——那需要槽内按层级重排三角与数字，
+   与「一个三角」的现状冲突，暂不做。（原记的「二级展开未做」已在 2026-11-27 补齐，
+   见 §9.70.3。）
 
 #### 9.70.6 验证
 
@@ -10622,8 +10625,8 @@ element 是 `Collection` 就返回 `col.toArray()`）。
 #### 9.71.2 本仓落地（`ui.rs` / `grid/array_cell.rs` / `grid/delegate.rs` / `grid/cell.rs`）
 
 - 常量（`ui.rs`）：`RESULT_ROW_HEAD_MARGIN_X = 4`（行头内距是 4，与单元格/列头的 6 不同）、
-  `RESULT_ROW_EXPANDER_SIZE = 16`、`RESULT_ROW_EXPANDER_SPACING = 2`。行号槽宽 48 不变：
-  `4 + 16 + 2 + 数字 + 4`。
+  `RESULT_ROW_EXPANDER_SIZE = 16`、`RESULT_ROW_EXPANDER_SPACING = 2`。行号槽宽 48 是**下限**：
+  `4 + 16 + 2 + 数字 + 4`，数字装不下时按实测文本宽撑开（2026-11-27 起，见 §20.8.8）。
 - 纯判定（`grid/array_cell.rs::row_expander_glyph(expandable, expanded)`）：无可展开列 →
   `None`；`expanded >= expandable` → `▼`；否则 `▶`（含部分展开）。2 条单测。
 - delegate 三件套：
@@ -11048,14 +11051,15 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 
 | 项 | 判定 |
 | --- | --- |
-| **行号槽宽固定 48** | 真值 `GridRowRenderer.computeHeaderWidth:114-128`（4+4 边界 + 16+2 三角 + 文本宽 + level*5）+ `LightGrid.java:1884-1897`（DEFAULT 30 / **MIN 40** / MAX 400，只在变大时改）。本仓 48 已满足 40 下限；**定性结论见 §39.2**（`column()` 只拿 `&App` 无法实测文本、百万行不能照抄遍历；「按位数推算」是自创口径 → 不做，正路待办 = `visible_rows_changed` 里量一次 + clamp）。定量：1–2 位行号真值约 **40–47**、3 位约 **54**、4 位约 **61** → **本仓只在 ≥3 位行号（≥100 行）时显窄 6–13px** |
+| **行号槽宽：按实测宽「只增不减」**（2026-11-27 已做，原「固定 48」判定作废） | 真值 `GridRowRenderer.computeHeaderWidth:114-128`（4+4 边界 + 16+2 三角 + `stringExtent(text)` + level*LEVEL_SPACING）+ `LightGrid.java:1884-1897`（DEFAULT 30 / **MIN 40** / MAX 400，**只在变大时改**）。本仓实现见 §20.8.8：量视口内行号文本真实宽（`text_system().shape_line`，同字体同 0.75rem 字号）→ `26 + 文本宽` clamp 到 **下限 48 / 上限 400**，变宽才写回并 notify；`clear()` 复位。**常量 48 仍是下限**（不缩）：1–2 位行号真值约 40–47，本仓保持 48 差 ≤8px，属有意差异（见下格） |
 | **行号槽三角字形** | 真值 `expand.svg` / `collapse.svg`（16×16、`#808080`）；本仓 `U+25B6` / `U+25BC` 文字字形 + `muted_foreground`（§9.71 已核，色与真值灰同档）。**形状同为实心三角**，差异只剩「字形 vs 矢量」与字号（12px 字形在 16px 盒内居中） |
-| **深层子行不缩进、子行行号槽无三角** | 与「行号槽宽固定 48」同一卡点：真值按 `LEVEL_SPACING` 逐级右移行头三角与行号、每层行头都有三角（`GridRowRenderer:73-86`），本仓槽内只有一个三角且只对底层数据行生效。层级只体现在行号文本（`1.1.1`），子行展开入口是单元格内三角（真值无这一层）。见 §9.70.5 第 5 条 |
+| **深层子行不缩进、子行行号槽无三角** | 真值按 `LEVEL_SPACING` 逐级右移行头三角与行号、每层行头都有三角（`GridRowRenderer:73-86`），本仓槽内只有一个三角且只对底层数据行生效。层级只体现在行号文本（`1.1.1`），子行展开入口是单元格内三角（真值无这一层）。槽宽**按实测文本宽**撑开（§20.8.8，只含文本宽、不含 `level*LEVEL_SPACING`），所以「带点子行标签」能装下，但多层不会逐级右移。见 §9.70.5 第 5 条 |
 | 单元格内三角（真值无） | 有意保留（截图形态 `▼ [3]` 需要格内方向指示） |
 | 列头其余 7 组菜单 | 本仓无列级能力，不摆空壳（§9.72.3） |
 | 「复制列名」浮层 / 输入框 / 固定提示 | 用户已定（§9.73.3） |
 | 菜单整体扁平 | 有意（§20.1） |
 | 空数组 `{}` / 非法字面量 / 子行左对齐 | 有意（§9.70.5） |
+| **行号槽宽下限 48（不缩到真值 40）** | 真值 `MIN_ROW_HEADER_WIDTH = 40`（`LightGrid.java:73`），但 `:1895` 的缩小只在 `decreaseSize` 显式开启时发生、正常只增。本仓把下限钉在 48（§2.4 原型值：4 左距 + 16 三角 + 2 间距 + 22 数字 + 4 右距），比真值 1–2 位行号宽 1–8px；换来行号列不随数据量在 40↔48 之间跳。要收到 40 起步只改 `RESULT_ROW_NUMBER_WIDTH` 一个常量（`grid/tests.rs` 里 5 处按 48 的断言须同步） |
 
 #### 20.8.4 等模型 / 等外部条件
 
@@ -11066,7 +11070,13 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 
 #### 20.8.5 复核对前序清单的三处更正
 
-1. **行号槽宽不是「可做」**：§39.2 早在 2026-11 就判定不做（`&App` 无 window、百万行遍历不成立、位宽推算是自创口径）。此前汇总里写成「可做的差异」是口径错，现按 §20.8.3 定档，只保留「≥3 位行号显窄」这条定量事实。
+1. **行号槽宽：「判定不做」已于 2026-11-27 作废**（原写「§39.2 早判定不做：`&App` 无 window、
+   百万行遍历不成立、位宽推算是自创口径」）。两条卡点逐条被推翻：① 「无 window」——组件
+   `TableDelegate::visible_rows_changed(&mut self, visible_range, window, cx)`
+   （`vendor/gpui-component/src/table/delegate.rs:258-264`，**带 `&mut Window`**）给了
+   `window.text_system().shape_line` 的入口；② 「百万行遍历」——不遍历全表，只量**视口内**
+   那几十行（与真值 `computeHeaderSizes` 同时机、同量级）；③ 「位宽推算自创口径」——现在用的
+   是真实文本 shaping，不是按位数乘平均宽。实做与取舍见 §20.8.8。
 2. **行号槽三角不是「缺 SVG」**：形状同为实心三角、颜色已是真值灰档；差异只剩「文字字形 vs 矢量图标」与字号。
 3. **获焦列四边框与 readOnly 下划线不是同一档**：前者本仓可做（有 `selected_cell` 可用 + 已登记路径），后者卡列级只读模型。
 
@@ -11175,6 +11185,68 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 （`platform/test/platform.rs:130`）都是 `pub(crate)`，crate 外读不到当前光标样式，
 headless 无法断言；本条依据是源码（`window.rs:1154-1167` 的解析顺序 +
 `button.rs:677-687` 的 root 写死 default），不是运行观测。
+
+#### 20.8.8 已交付 · 行号槽宽按行号实测宽「只增不减」（2026-11-27）
+
+**真值**（两段拼起来才完整）：
+
+| 环节 | 真值 | 出处 |
+| --- | --- | --- |
+| 单行需要的宽 | `LEFT_MARGIN(4) + RIGHT_MARGIN(4) + [可展开? EXPANDED_BOUNDS.width(16) + EXPANDER_SPACING(2)] + stringExtent(rowText) + level*LEVEL_SPACING` | `GridRowRenderer.java:114-128`（`computeHeaderWidth`） |
+| 取最大 + 夹取 | 遍历 `gridRows` 取最大，clamp `DEFAULT_ROW_HEADER_WIDTH(30)` / `MIN_ROW_HEADER_WIDTH(40)` / `MAX_ROW_HEADER_WIDTH(400)` | `LightGrid.java:72-74`、`:1884-1897`（`computeHeaderSizes`） |
+| 变更规则 | `if (newRowHeaderWidth > oldRowHeaderWidth \|\| decreaseSize) setRowHeaderWidth(...)` —— **默认只增不减** | `LightGrid.java:1895` |
+
+**本仓实现**：
+
+| 位置 | 内容 |
+| --- | --- |
+| `ui.rs` | 新增 `RESULT_ROW_NUMBER_MAX_WIDTH = px(400.)`（真值 MAX）、`RESULT_ROW_LABEL_FONT_SCALE = 0.75`（行号是 `.text_xs()`，11-27 起有）；`RESULT_ROW_NUMBER_WIDTH`（48）注释改为「**下限、不是死值**」 |
+| `grid/delegate.rs` | 新增字段 `row_number_width: Option<Pixels>`（`None` = 没量过）；`row_number_width()` = 量测值 max 48；`row_number_width_for_text(text_width)` 纯函数 = `(26 + 文本宽)` clamp 到 48…400；`required_row_number_width(visible, window, cx)` 用 `window.text_system().shape_line` 量视口内行号文本（同 `theme.font_family`、同 `theme.font_size * 0.75`）；`note_row_number_width(required)` 只在变大时写回并返回 true；`grow_row_number_width(…)` 串起量 + 记；`clear()` 复位为 `None` |
+| `grid/table_impl.rs` | `visible_rows_changed` 里调 `grow_row_number_width(visible_range, window, cx)`，true 才 `cx.notify()`；`column()` 的行号列 `.width/.min_width` 改读 `self.row_number_width()` |
+
+**为什么卡点成立（三关全部有源码支撑）**：
+
+1. `column()` 只拿 `&App` 量不了文本 → 不在这里量；改用
+   `TableDelegate::visible_rows_changed(&mut self, visible_range, window, cx)`
+   （`vendor/gpui-component/src/table/delegate.rs:258-264`，**带 `&mut Window`**）。
+2. 百万行不能全表遍历 → 只量组件报来的可见区间（视口容量几十行），与真值
+   `computeHeaderSizes` 同为「每次滚动/列宽变化顺手算」的量级。
+3. 「按位数乘平均字宽」是自创口径 → 用 `shape_line` 的真实字形推进宽
+   （`text_system.rs:672-711` + `ShapedLine::width()` `text_system/line.rs:88`）。
+
+**真实裁切的场景**（避免把结论写成没验过的定量）：48 的可用文本宽 = 48 − 2×4 − 16 − 2 = **22px**
+（带三角的行），无三角行 = 40px。因此：
+
+- 1–3 位行号（`200` 在 12px 字号下约 19px）**在 48 以内**，本仓历来没裁；
+- 4 位起（`1000`，≥1000 行）在带三角行会越界 1–4px；
+- 数组子行行号（`row_label` = `1.1.1.1` 这类带点标签，8 字符 ≈ 40px）**越界最明显**
+  （§9.70.5 第 5 条的子行标签是这条的主要受益者）；
+- 旧文档里「≥3 位行号显窄 6–13px」的定量**已删**：那是拿真值 3 位宽（≈54，Segoe UI 9pt 更大字号）
+  直接减本仓 48 得出的，漏了「本仓行号字号更小、3 位装得下」这一层，属未实证推算。
+
+**headless 测不出真实测宽**（这条要写清，否则会被误读为「渲染用例已覆盖」）：
+测试平台装配的是 `NoopTextSystem`（`gpui-pre-0.3.12/src/platform/test/platform.rs:2` 引入、
+`:139` 安装），`shape_line` 的宽度恒 **0**。所以用例钉的是
+① `row_number_width_for_text` 的折算（48 / 50 / 60 / 400 四档）、
+② `note_row_number_width` 的只增不减与 `clear` 复位、
+③ **headless 量宽恒落回 48** 这条事实本身。真实字号下的宽度只能真机看。
+
+**有意差异**：
+
+- **下限 48 不缩到真值 40**（见 §20.8.3 表格末行）：换来行号列不随数据量在 40↔48 间跳；
+  代价是 1–2 位行号比真值宽 1–8px。要收紧只改一个常量（5 处用例断言要同步）。
+- **三角盒恒算 18px**：本仓三角是条件渲染（只有顶层数组行），但槽宽不能随行抖动；
+  真值对不可展开行不加这 18px（差值落进下限兜底，不改变结果）。
+- **不实现 `level * LEVEL_SPACING` 缩进**：深层子行不逐级缩进是既有差异（§9.70.5 第 5 条），
+  所以槽宽公式里也不加这一项。
+
+**未目视**：4 位行号（≥1000 行）与数组深层子行（`1.1.1.1`）在真机上是否真被撑开——按
+用户约束不启动 GUI / 不截图，待用户自行查看；若发现「撑宽后行号列仍在抖动」，原因是
+逐级缩进未做（槽宽只按文本宽，不按 `level`），不是宽度逻辑本身。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **513 passed / 0 failed**
+（512 + 新增 `row_number_gutter_grows_for_longer_labels_and_never_shrinks`）；
+`cargo test -p rds-ui-guard` = **4 passed**（`ui.rs` 裸 px 基线 30 → 31，理由写在该行注释）。
 
 ## 21. 遗留汇总
 

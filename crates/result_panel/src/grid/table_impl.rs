@@ -256,13 +256,20 @@ impl TableDelegate for ResultGridDelegate {
     fn visible_rows_changed(
         &mut self,
         visible_range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut Context<TableState<Self>>,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
     ) {
         // 【D10-7 翻页键】首行与容量一起回写：`PAGE_UP` / `PAGE_DOWN` 的「一页」
         // 就是视口容量（DBeaver `getVisibleGridHeight()`），所以 `len` 必须跟着存。
         self.visible_top = visible_range.start;
         self.visible_len = visible_range.len();
+        // 【行号槽宽】真值在 `computeHeaderSizes` 里逐行量行号文本宽、clamp 后「只在变大时」
+        // 改槽宽（`LightGrid.java:1884-1897`）。这里取同一处时机（滚动/筛选/排序都会回调），
+        // 只量这一屏（视口容量几十行），量到更宽才 notify——否则每帧都会触发重排。
+        let grown = self.grow_row_number_width(visible_range, window, cx);
+        if grown {
+            cx.notify();
+        }
     }
 
     /// 滚动到底自动加载（B5b）：组件库在可见范围距末尾不足 `load_more_threshold` 行时
@@ -314,10 +321,14 @@ impl TableDelegate for ResultGridDelegate {
             };
         }
         if Self::is_row_number(col_ix) {
-            // 行号槽：窄、钉在左边、不可拖宽/移动——它是视图辅助，不是数据列
+            // 行号槽：窄、钉在左边、不可拖宽/移动——它是视图辅助，不是数据列。
+            // 宽度取 delegate 的量测值（真值 `GridRowRenderer.computeHeaderWidth` +
+            // `LightGrid.computeHeaderSizes` 的「只增不减」）：常量 48 是下限，
+            // ≥3 位行号时由 `visible_rows_changed` 撑宽（`row_number_width`）。
+            let width = self.row_number_width();
             return Column::new("row-no", "#")
-                .width(ui::RESULT_ROW_NUMBER_WIDTH)
-                .min_width(ui::RESULT_ROW_NUMBER_WIDTH)
+                .width(width)
+                .min_width(width)
                 .paddings(cell_paddings())
                 .fixed_left()
                 .resizable(false)

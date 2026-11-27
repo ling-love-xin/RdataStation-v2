@@ -172,7 +172,25 @@ pub const RESULT_COLUMN_WIDTH_TEXT: Pixels = px(200.);
 /// 2026-11-26：行号槽里补了数组展开三角（真值 `GridRowRenderer.java:73-86`），
 /// 48 = 4（左距）+ 16（三角）+ 2（三角与数字间距）+ 数字 + 4（右距），
 /// 见 [`RESULT_ROW_HEAD_MARGIN_X`] / [`RESULT_ROW_EXPANDER_SIZE`] / [`RESULT_ROW_EXPANDER_SPACING`]。
+///
+/// **它是下限、不是死值**（2026-11-27）：真值按行号文本实测宽撑槽
+/// （`GridRowRenderer.computeHeaderWidth:114-128` + `LightGrid.computeHeaderSizes:1884-1897`
+/// 的 DEFAULT 30 / MIN 40 / MAX 400、「只在变大时改」）。本仓算出来的宽度达不到 48 时
+/// 仍用 48（不缩——1–2 位行号真值 40–47，本仓保持 48，差 ≤8px 已在 §20.8.3 登记），
+/// 超过 48 才长（修掉「≥3 位行号被裁」这个真缺陷），见
+/// `ResultGridDelegate::row_number_width`。
 pub const RESULT_ROW_NUMBER_WIDTH: Pixels = px(48.);
+
+/// 行号槽宽的上限（400px，真值 `LightGrid.java:74` `MAX_ROW_HEADER_WIDTH`）
+///
+/// 只是一个保护值：行号是纯数字，实测宽远到不了这里；照抄真值上限是为了「口径不另发明」。
+pub const RESULT_ROW_NUMBER_MAX_WIDTH: Pixels = px(400.);
+
+/// 行号数字的字号倍率（0.75 rem = 主题字号 16 时的 12px，对应 `text_xs` 档）
+///
+/// 行号槽里画的是 `.text_xs()` 文本，量宽必须用**同一个字号**，否则算出来的槽宽与实际
+/// 渲染差一档（与 `grid/fit.rs` 量表头文字同一类口径）。
+pub const RESULT_ROW_LABEL_FONT_SCALE: f32 = 0.75;
 
 /// 行号槽的**单侧**左右内距（4px）
 ///

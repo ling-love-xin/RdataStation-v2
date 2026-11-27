@@ -4533,6 +4533,117 @@ fn cells_stretch_to_the_column_boundary_for_grid_lines(cx: &mut gpui_kit::TestAp
     );
 }
 
+/// 【行号槽宽 2026-11-27】真值按行号文本实测宽撑槽：
+/// `GridRowRenderer.computeHeaderWidth:114-128` 量文本，`LightGrid.computeHeaderSizes:1884-1897`
+/// 逐行取最大、clamp 40/400、**只在变大时**改。
+///
+/// 本仓常量 48 是下限（1–2 位行号真值 40–47，保持 48，差 ≤8px 已登记 §20.8.3）。
+/// 两层各钉一半：
+/// 1. **折算**（纯函数 `row_number_width_for_text`）：短文本落回下限 48、3 位数撑到
+///    `48 + 文本宽`、超长夹到真值上限 400；
+/// 2. **决策**（`note_row_number_width`）：只增不减、换结果集复位。真值
+///    `LightGrid.java:1895` 的 `|| decreaseSize` 默认 false，本仓同口径。
+///
+/// **量宽本身在 headless 里测不出来**：测试平台装的是 `NoopTextSystem`
+/// （`gpui-pre-0.3.12/src/platform/test/platform.rs:2` 引入、`:139` 装配），
+/// `shape_line` 的宽度恒 0——所以这里顺手把这条事实也钉住（`required_*` 恒返 48），
+/// 免得以后有人误以为「渲染用例已经覆盖了真实测宽」。真实字号下的宽度只能真机验。
+#[gpui_kit::test]
+fn row_number_gutter_grows_for_longer_labels_and_never_shrinks(
+    cx: &mut gpui_kit::TestAppContext,
+) {
+    use gpui_kit::px;
+
+    cx.update(gpui_kit::init);
+
+    // —— 1. 折算：下限 48（26px chrome = 左右内距 8 + 三角 16 + 间距 2）
+    assert_eq!(
+        ResultGridDelegate::row_number_width_for_text(px(0.)),
+        crate::ui::RESULT_ROW_NUMBER_WIDTH,
+        "空文本不该把行号槽压到 48 以下"
+    );
+    // 1–2 位（"8" ≈ 6px、"88" ≈ 12px）、3 位（"200" ≈ 18px）都装得下，不缩也不撑
+    assert_eq!(
+        ResultGridDelegate::row_number_width_for_text(px(18.)),
+        crate::ui::RESULT_ROW_NUMBER_WIDTH,
+        "3 位行号（26 + 18 = 44）仍在 48 以内，不该把行号列撑宽"
+    );
+    // 4 位（"1000" ≈ 24px）26 + 24 = 50 > 48 → 撑宽（旧固定 48 会裁掉两侧 1–2px）
+    assert_eq!(
+        ResultGridDelegate::row_number_width_for_text(px(24.)),
+        px(50.),
+        "4 位数没把行号槽撑到 26 + 文本宽"
+    );
+    // 数组子行标签（"1.1.1.1" ≈ 34px）同理：26 + 34 = 60
+    assert_eq!(
+        ResultGridDelegate::row_number_width_for_text(px(34.)),
+        px(60.),
+        "带点的子行行号没把行号槽撑开"
+    );
+    // 上限：真值 MAX_ROW_HEADER_WIDTH = 400
+    assert_eq!(
+        ResultGridDelegate::row_number_width_for_text(px(500.)),
+        crate::ui::RESULT_ROW_NUMBER_MAX_WIDTH,
+        "超长行号没夹到真值上限 400"
+    );
+
+    // —— 2. headless 量宽恒为下限（NoopTextSystem，见文档注释）
+    let owned: Vec<Vec<String>> = (1..=200).map(|i| vec![i.to_string(), "v".to_string()]).collect();
+    let refs: Vec<Vec<&str>> = owned
+        .iter()
+        .map(|row| row.iter().map(String::as_str).collect())
+        .collect();
+    let rows: Vec<&[&str]> = refs.iter().map(Vec::as_slice).collect();
+    let delegate = grid_with(&rows);
+    let (harness, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| gpui_kit::component::table::TableState::new(delegate, window, cx)),
+    });
+    let state = harness.read_with(vcx, |harness, _| harness.state.clone());
+    let measured = vcx.update(|window, cx| {
+        state
+            .read(cx)
+            .delegate()
+            .required_row_number_width(0..200, window, cx)
+    });
+    assert_eq!(
+        measured,
+        crate::ui::RESULT_ROW_NUMBER_WIDTH,
+        "headless 的文本宽恒 0（NoopTextSystem），量宽必然落回下限——若这里变了，\
+         说明测试平台换了真实字体，改用真实宽度断言"
+    );
+
+    // —— 3. 决策：只增不减
+    let grown = vcx.update(|_, cx| {
+        state.update(cx, |state, _| {
+            state.delegate_mut().note_row_number_width(px(56.))
+        })
+    });
+    assert!(grown, "56 > 48，应当写回");
+    assert_eq!(
+        vcx.update(|_, cx| state.read(cx).delegate().row_number_width()),
+        px(56.),
+        "写回后的槽宽应当就是需要的宽度"
+    );
+    let shrank = vcx.update(|_, cx| {
+        state.update(cx, |state, _| {
+            state.delegate_mut().note_row_number_width(crate::ui::RESULT_ROW_NUMBER_WIDTH)
+        })
+    });
+    assert!(!shrank, "量到更窄的行号不该缩回 48（真值只在变大时改）");
+
+    // 新结果集复位：上一份量出来的宽度不带到下一份（否则小结果集也挂着宽行号列）
+    vcx.update(|_, cx| {
+        state.update(cx, |state, _| {
+            state.delegate_mut().clear("新批次");
+        })
+    });
+    assert_eq!(
+        vcx.update(|_, cx| state.read(cx).delegate().row_number_width()),
+        crate::ui::RESULT_ROW_NUMBER_WIDTH,
+        "换结果集后行号槽宽应回到常量下限"
+    );
+}
+
 /// 【行号槽右键 2026-11-21】右键行号格必须把它自己记成菜单目标（`context_cell`）。
 ///
 /// 组件的右键派发只认 delegate 上**最近一次**落点（`grid/menu.rs::context_menu` 读
