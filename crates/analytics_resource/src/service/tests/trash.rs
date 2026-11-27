@@ -54,6 +54,91 @@ async fn seed_table_asset(
         .expect("登记表资产")
 }
 
+/// 还原要重新过显示名唯一：先删后建的同名资产合法，旧条目复活时不能再造第二条。
+#[tokio::test]
+async fn t198_restore_refuses_a_name_taken_after_trash() {
+    let (service, dir) = test_service().await;
+    let first = write_draft(&dir, "first.sql", b"select 1;").await;
+    let mut req = archive_req(&first, "reports/first.sql", None);
+    req.name = "共同报表".to_string();
+    let old = service.archive(req).await.expect("archive old");
+    let trashed = service
+        .move_to_trash(&[old.resource_id.clone()])
+        .await
+        .expect("trash old");
+
+    // 旧条目软删后显示名重新可用：新资产用同一个名字是合法的。
+    let second = write_draft(&dir, "second.sql", b"select 2;").await;
+    let mut req = archive_req(&second, "reports/second.sql", None);
+    req.name = "共同报表".to_string();
+    let new = service.archive(req).await.expect("archive new with reused name");
+
+    let error = service
+        .restore_archive_from_trash(&trashed[0].trash_id)
+        .await
+        .expect_err("同名存活资产存在时必须拒绝还原");
+    assert!(
+        format!("{error}").contains("占用"),
+        "错误要说清显示名被谁占用：{error}"
+    );
+    assert!(
+        !service
+            .payload()
+            .resolve("reports/first.sql")
+            .expect("resolve old path")
+            .exists(),
+        "拒绝必须发生在搬回本体之前"
+    );
+    assert_eq!(
+        service
+            .store()
+            .alive_by_name("共同报表")
+            .await
+            .expect("alive by name")
+            .len(),
+        1,
+        "不能出现第二条同名存活资产"
+    );
+    assert_eq!(new.version, 1, "新资产要正常落 v1");
+
+    let _ = fs::remove_dir_all(&dir).await;
+}
+
+#[tokio::test]
+async fn t199_table_restore_refuses_a_name_taken_after_trash() {
+    let (service, dir) = test_service().await;
+    let old = seed_table_asset(&service, "占用表", "arc_old").await;
+    service
+        .store()
+        .soft_delete_archive(&old.id)
+        .await
+        .expect("soft delete old");
+    let new = seed_table_asset(&service, "占用表", "arc_new").await;
+
+    let trash_id = format!("{}{}", crate::model::TRASH_ID_TABLE_PREFIX, old.id);
+    let error = service
+        .restore_archive_from_trash(&trash_id)
+        .await
+        .expect_err("表型还原也要过显示名闸门");
+    assert!(
+        format!("{error}").contains("占用"),
+        "错误要说清显示名被谁占用：{error}"
+    );
+    assert_eq!(
+        service
+            .store()
+            .alive_by_name("占用表")
+            .await
+            .expect("alive by name")
+            .len(),
+        1,
+        "不能出现第二条同名存活资产"
+    );
+    assert_eq!(new.name, "占用表");
+
+    let _ = fs::remove_dir_all(&dir).await;
+}
+
 /// 移入回收站：本体离开 `resources/` 进入项目级回收站，索引行**软删**（列表与
 /// “按路径查存活行”都看不到，但记录本身还在，还原才能恢复别名 / 标签 / 指纹）。
 /// 永久删除与清空：都**只动本模块的**条目（回收站是共用的，删别人的东西不是清空）；

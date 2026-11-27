@@ -175,6 +175,7 @@ impl ArchiveService {
                     &format!("「{}」不在回收站里", record.name),
                 ));
             }
+            self.ensure_display_name_free(&record.name).await?;
             self.store.undelete_archive(resource_id, None).await?;
             self.emit(ChangeReason::Untrashed, Some(record.id.clone()));
             self.record_timeline(
@@ -199,6 +200,7 @@ impl ArchiveService {
                     &format!("「{}」不在回收站里", record.name),
                 ));
             }
+            self.ensure_display_name_free(&record.name).await?;
             let table = record.analytics_table.as_deref().unwrap_or("");
             if self.analysis_table_present(table).await? == Some(false) {
                 return Err(service_err(
@@ -245,6 +247,10 @@ impl ArchiveService {
                 ),
             ));
         };
+
+        // 本体已经在回收站里，但显示名仍可能被“删掉后新建”的同名资产占用；
+        // 闸门放在搬回本体之前，失败时磁盘状态完全不动。
+        self.ensure_display_name_free(&record.name).await?;
 
         let restored = trash
             .restore(trash_id, &self.payload.resources_dir())
@@ -295,6 +301,24 @@ impl ArchiveService {
         )
         .await;
         self.store.get_resource_by_id(&record.id).await
+    }
+
+    /// 还原前的显示名闸门：存活资产里已经有同名条目就拒绝。
+    ///
+    /// 显示名唯一此前只在 `archive_new` / `rename` 收口；回收站还原、索引补登都是
+    /// 绕过 `archive_new` 的写入口，不在这里拦一次，就能重新造出两条同名存活资产。
+    /// 错误里带上占用方 id，用户知道该改名还是该先处理哪一条。
+    async fn ensure_display_name_free(&self, name: &str) -> Result<(), CoreError> {
+        let Some(holder) = self.store.alive_by_name(name).await?.into_iter().next() else {
+            return Ok(());
+        };
+        Err(service_err(
+            "untrash",
+            &format!(
+                "显示名「{name}」已被资产（id={}）占用；请先改名或永久删除占用方，再还原",
+                holder.id
+            ),
+        ))
     }
 
     /// 由**原相对路径**还原（索引修复的「从回收站还原」走这条：那一组行只有登记记录，
