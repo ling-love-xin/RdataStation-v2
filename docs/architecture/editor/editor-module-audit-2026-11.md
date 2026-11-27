@@ -13,7 +13,7 @@
 3. **真正的问题不在代码质量，在三个结构维度**：
    - **状态所有权**：`EditorHostPanel` 一个结构体 76 个 `pub(crate)` 字段、跨 38 个文件 458 个 `fn`，任何域都能写任何域的字段；
    - **编译边界**：`editor` 已膨胀成一个"迷你应用"（23 个直接依赖，含 `duckdb` / `rfd` / `scratchpad` / `file_meta`），`ports/` 6,927 行是从 workbench 下沉进来换编译时间的应用服务；
-   - **模式语义唯一性**：文档说「能力表是唯一分叉点」，实测 `EditorMode` 判定散在 **10 处**，其中 `view::fold::is_enabled` 与 `view::highlight::is_enabled` 是对 `Capabilities::folding` 的重复实现——这套重复已经真实引发过一次三处口径不一致（§6 P0-2）。
+   - **模式语义唯一性**：文档说「能力表是唯一分叉点」，实测 `EditorMode` 判定散在 **10 处**，其中 `view::fold::is_enabled` 与 `view::highlight::is_enabled` 是对 `Capabilities::folding` 的重复实现——这套重复已经真实引发过一次三处口径不一致（§5 P0-2）。
 4. **继续拆文件已到边际**：`view/host/` 从 1 个大文件拆成 38 个，`mod.rs` 仍有 717 行 + 76 字段的巨型结构体定义。**下一刀不该再按"文件"切，该按"状态所有权"和"编译边界"切。**
 5. 我的设计主张排序：先做**便宜且能自证**的两件（模式单一分叉点 + 文档漂移守护测试），再做编译边界三段拆分，最后才动 `EditorHostPanel` 的状态分组与结果域收敛。**不建议**一步到位把 76 字段拆成 4 个 Entity。
 
