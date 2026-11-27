@@ -35,11 +35,11 @@
 |---|---|---|
 | 引擎规模 | 75 个 `.rs`，≈ 3 万行 | 递归统计 `crates/engine/src` |
 | 引擎技术债信号 | **11 处** | 全库 grep `TODO/FIXME/unimplemented/todo!/暂不/未实现/dead_code` |
-| 引擎单测 | **356**（其中 analysis/catalog/federation/accel/file_view/temp_table 分区 **158**） | `cargo test -p rds-engine --lib -- --list` |
+| 引擎单测 | **357**（审计时 356；刀29 之后 explain 单测 11→19，刀27 删了 legacy 的 11 条） | `cargo test -p rds-engine --lib -- --list` |
 | 面板规模 | `mod.rs` 3280 + `layout.rs` 192 + `data_objects_tab.rs` 3122 + `layout_probe.rs` 546 | 行数统计 |
 | 面板单测 | workbench lib **227**（合并基线 225），其中 data_objects / layout_probe **55** | `cargo test -p rds-workbench --lib -- --list` |
 | 面板真排版断言 | 3 个 headless 用例（行高、走马灯、toolbar/状态栏位置） | `crates/workbench/src/panels/data_objects_tab/layout_probe.rs` |
-| 其余包（合并后实测） | store 207 / connection 104 / connection-dialog 88 / sql 245 / editor 886 / `analysis_restart_probe` 1 | 各包 `cargo test` |
+| 其余包（合并后实测） | store 207 / connection 104 / connection-dialog 88 / sql 245 / editor 889（审计时 886，刀36 加 3）/ `analysis_restart_probe` 1 | 各包 `cargo test` |
 
 > 注：workbench 当前工作区为 227 而合并基线为 225，差异来自工作区内未提交的 `data_objects/layout.rs` 改动所带用例；本审计只读该文件，未修改。
 
@@ -64,7 +64,7 @@
 | 意图持久 + replay | 闭环 | `analysis_sources`（034）+ `analysis_primary`（036）；`analysis_restart_probe` 1 passed（`clear_project` → `publish_project` → 按登记挂载，断言别名 / 主源 / 表清单三处回位） | — |
 | 源能力矩阵 | 闭环（有例外） | `duckdb/accel.rs:57-207`：能力 / 扩展名 / `ATTACH TYPE` / scheme / 只读例外 / Secret 需求 / 限定名段数，全部收在引擎一处 | 例外见 P0-2 |
 | 源覆盖 | 半闭环 | `AccelKind` = MySql / PostgreSql / Sqlite / DuckDb / Oracle；`mssql` 只出现在注释（`federation/mod.rs:9`） | MSSQL / DB2 / Mongo / ClickHouse 未接 |
-| 类型保真 | 半闭环 | `services/duckdb_service.rs:507`：Decimal256 直接拒；`catalog-context-model.md:102` 自述「DECIMAL→DOUBLE 只警告不阻断（**未做**）」 | 降级警告未实现 |
+| 类型保真 | 半闭环（直灌侧已闭环） | 刀30 后 `services/duckdb_service.rs:507` 的 `cast_decimal256_columns` 把 Decimal256 列 cast 成 `Float64` 并在 `map_arrow_type` 里带出降级说明（带列名 `tracing::warn!`，两条单测）；仍缺的是**预检侧**跨源同名列类型对照（30b） | 预检侧类型对照（需先补列类型事实 + 警告通道；见 §6 第 4 行） |
 | 发送前预检 | 闭环 | `rds-sql::table_paths`（9 条抽取）+ `editor::exec::preflight`（13 条判定，含主源优先、内置库不参与歧义） | — |
 | 临时表 / 结果集 | 闭环 | `duckdb/temp_table/temp_table.rs` 1170 + `temp_table/analysis.rs` 661；落点钉 `memory.rds_tmp`；`result_rows_reach_the_temp_table` | — |
 | 物化 / 落库 / 存档 | 闭环 | `analysis/materialize.rs` 546、`temp_table/promote.rs` 368、`persist_result_table`、`duckdb/snapshot/snapshot.rs` 500 | 入口分散（面板 / 结果区 / 资产三处各一套入口） |
@@ -78,19 +78,21 @@
 
 ### 2.1 引擎技术债全量（11 处，便于逐条销项）
 
+> 2026-11-28 复核：Decimal256 那条已由刀30 销项（现为「降级 + 说明」而非「拒收」），其余 10 处仍成立；`duckdb_service.rs` 的 `allow(dead_code)` 因刀30 插入代码从 361 漂到 396。
+
 | 位置 | 内容 | 归类 |
 |---|---|---|
 | `cache/lru_cache.rs:22` | `#[allow(dead_code)]` | 待用 / 清理 |
 | `cache/query_cache.rs:34` | `#[allow(dead_code)]` | 待用 / 清理 |
 | `cache/memory_guard.rs:70` | `#[allow(dead_code)]` | 待用 / 清理 |
-| `services/duckdb_service.rs:361` | `#[allow(dead_code)]` | 待用 / 清理 |
+| `services/duckdb_service.rs:396` | `#[allow(dead_code)]`（原记 361，刀30 后行号漂移） | 待用 / 清理 |
 | `duckdb/manager.rs:524` | `#[allow(dead_code)]` | 待用 / 清理 |
 | `duckdb/temp_table/temp_table.rs:733` | `#[allow(dead_code)]` | 待用 / 清理 |
-| `services/duckdb_service.rs:507` | 「Decimal256 暂不支持（转成 DOUBLE 会丢精度）」 | P0-3 类型保真 |
+| ~~`services/duckdb_service.rs:507`~~ | ~~「Decimal256 暂不支持（转成 DOUBLE 会丢精度）」~~ **已销项（刀30）**：现为 Arrow 层 cast 成 `Float64` + 带列名的降级说明 | P0-3 类型保真 |
 | `cache/minicatalogs.rs:103` | TODO：JSON 定义就绪后换 `include_str!` | P1-6 |
 | `duckdb/manager.rs:185` | TODO：未来可集成 `SqlEngine` 做更严格验证 | 观察，不阻塞 |
 | `services/result_types.rs:2` | `TODO(migration)`：自 v1 抽取 | 记账，不阻塞 |
-| `services/sql_parser_service.rs:172` | `dialect` 暂不参与切分 | 设计取舍，文档已述 |
+| `services/sql_parser_service.rs:172` | `dialect` 暂不参与切分（`split_sql` 的 `_dialect` 未用） | 设计取舍，文档已述 |
 
 ---
 
@@ -249,6 +251,7 @@
 | 包 | targets | passed | failed | 结论 |
 |---|---|---|---|---|
 | rds-engine（修前） | 22 | 416 | 1 | `duckdb_accel_probe::probe_postgres_source_attach` |
+| rds-engine（刀40 后） | 22 | **417** | **0** | 全绿；`federation_explain_probe` 也在其中 |
 | rds-database（修前） | 5 | 326 | 6 | 六条全是同一句 `驱动 postgres / mysql 应在注册表里` |
 | rds-database（刀39 后） | 5 | **332** | **0** | 全绿（1 ignored） |
 
