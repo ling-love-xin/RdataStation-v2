@@ -71,7 +71,7 @@
 | 扩展治理 | 闭环 | `extensions/{inventory 474, reconcile 247, verify 174}` + `extension/plugin.rs` 502 + `duckdb_extensions_probe`；面板「装扩展」按钮 `data_objects_tab.rs:1489` | — |
 | 安全面 | 闭环（有例外） | `services/policy_guard.rs` 721（editor 9 处引用）+ `refs.rs` 516 + `scrub_credentials`；`AccelSource` 手写 `Debug` 脱敏（`accel.rs:219-231`） | Oracle 例外见 P0-2 |
 | 查询缓存 | 接线 | `services/sql_service.rs:634` 用 `get_query_cache()`；`connection_manager.rs:9` 用 `CacheManager`；`database/navigator_service.rs:2318` 用 L1 | 无 UI 观测：`cache_dialog` 清的是磁盘元数据缓存，不是这套 |
-| EXPLAIN | 已闭环（刀36） | UI 入口 `editor/src/view/host/exec/tx.rs:19 explain_current`；本地通道改发 `EXPLAIN (FORMAT JSON)`，回执在 `exec/pump.rs` 处经 `exec/plan.rs` 展平成「层级 / 算子 / 对象 / 预估行数 / 下推 / 额外信息」六列表；源库方言的文本计划原样放行 | 计划树解析 / 外部源「投影已推 · 过滤未推」已进结果区；全表扫描判定与性能建议仍只有引擎侧 API，未在 UI 呈现 |
+| EXPLAIN | 已闭环（刀36 / 刀37） | UI 入口 `editor/src/view/host/exec/tx.rs:19 explain_current`；本地通道改发 `EXPLAIN (FORMAT JSON)`，回执在 `exec/pump.rs` 处经 `exec/plan.rs` 展平成「层级 / 算子 / 对象 / 预估行数 / 下推 / 额外信息」六列表；源库方言的文本计划原样放行 | 计划树解析、「投影已推 / 过滤未推」与「整句下推 · 源端执行」已进结果区（真机形态见 §5）；全表扫描判定与性能建议仍只有引擎侧 API，未在 UI 呈现 |
 | FTS | 孤岛 | `duckdb/search/fts.rs` 348 行，仅经 `duckdb/mod.rs:76-77` 的 `pub use search::*` 导出 | 零入口 |
 | minicatalog | 未完成 | `cache/minicatalogs.rs:103` TODO（等 JSON 定义），全仓无引用 | 未接线 |
 | legacy 联邦 | 死面 | `federation/legacy.rs:6` 自述「网络源拼 `ATTACH '<url>' AS 别名`，没有 `(READ_ONLY)`」；`FederationManager` 只有 `duckdb/mod.rs:64`、`lib.rs:87` 的 re-export + 自身测试 | 应删除（见 P0-1） |
@@ -222,6 +222,22 @@
 **同一轮跑出的实证（都属「门控从不跑」的后果）**：
 - `rds-database`：`5 targets / 332 passed / 0 failed / 1 ignored`。
 - `rds-workbench`：本地 `--tests` 编译不过，根因是 `.gitignore` 掉的本地探针 `tests/zz_fixture_probe.rs:91` 仍给 `ConnectRequest` 写已删的 `use_duckdb_fed`（`error[E0560]`）。该文件**不入库**（`.gitignore:51 **/tests/zz_*.rs`），所以 CI 与别人的机器上看不到这条；刀34 改好后 `--no-run` → Finished 6m20s。随后本机该包又因并行改动（`analytics_resource/src/service/table_asset.rs` 未闭合分隔符）编译失败，与本审计无关。
+- `rds-workbench` **实跑**（`real-db-gate-20261127-235830`，刀36 之后）：`44 targets / 405 passed / 3 failed / 0 ignored`。三条失败逐条归属如下（都不是本审计引入）：
+  1. `data_source_lifecycle::save_without_federation_does_not_register_secret`（`tests/data_source_lifecycle.rs:390`，"未开启联邦加速不应注册 Secret"）——并行线（`analytics`）改动后的真实红；
+  2. `ui_contract::shared_fields_are_whitelisted`（`tests/ui_contract.rs:1578`，"Shared 字段集变化：新增字段请先判定归属"）——同上，`Shared` 加了字段但白名单与 `panels-modules.md §3` 未同步；
+  3. `zz_fixture_probe::probe_and_connect_all_fixtures`——**不入库的本地探针**，失败原话 `Unknown connection URL parameter 'ssl-mode'`（连接的 `ssl-mode` 参数与驱动 `parse_url` 不认），与本审计无关。
+
+**本轮真机取证（刀37，MySQL + PG 已在 `192.168.3.138` 实连，Oracle 1521 未起）**
+
+`EXPLAIN (FORMAT JSON)` 对外部源**能跑**，回执照旧是两列 `explain_key` / `explain_value`；但计划节点形态与刀29 的假设不一致，必须按实测改写：
+
+| 源 | 查询形态 | 计划节点 | `collect_source_scans` | 结论 |
+|---|---|---|---|---|
+| MySQL | 任意（纯扫描 / 单列投影 / 带谓词 / 本地 join / 表达式） | **`MYSQL_QUERY`** 单节点 | 0 条 | MySQL 扩展把整句 SELECT 绑定成表函数，**永远**拿不到 `MYSQL_SCAN` |
+| PG | 纯扫描 / 单列投影 / 带谓词 | `POSTGRES_SCAN`（带 `Table` / `Projections`，带谓词时带 `Filters`） | 1 条 | 与刀29 假设一致 |
+| PG | 本地 join / 表达式 | **`POSTGRES_QUERY`** 单节点 | 0 条 | 整句下推时才退化成 `_QUERY` |
+
+因此 `is_federated_operator` 只认 `*_SCAN` 是**错的**（MySQL 全部查询会被判成"没看到外部源"，「下推」列永远空白，`collect_source_scans` 永远是空）；刀37 已把 `*_QUERY` 纳入，并给 `SourceScanFacts` 增 `whole_statement`：整句下推时结论只说「整句下推 · 源端执行」，不再用「投影未推」替它说话。实测原文留在 `.rds/tmp/fed-explain-probe3.log`。
 
 ---
 
@@ -231,7 +247,7 @@
 |---|---|---|---|
 | 1 | 删 `legacy` 死面 + 收 `pub use`（P0-1）**——已执行（刀27）** | `duckdb/federation/{legacy,mod}.rs`、`engine/src/lib.rs`、`duckdb/mod.rs` | `cargo check -p rds-engine` 通过；`cargo test -p rds-engine --lib` **345 passed / 0 failed**；`grep FederationManager` 在 `crates` 下清零 |
 | 2 | 文档按 Oracle 现实改写（P0-2）**——已执行（刀28）** | `docs/architecture/federation/catalog-context-model.md` §8 #5 / §11；`driver-capability-matrix.md` §1 / §4 | 逐条对照 `accel.rs:171-174`、`session.rs::l2_write_refusal`、`registry.rs:558-596`；文档内「一律只读」表述不再与实现冲突 |
-| 3 | 接 `ExplainAnalyzer` 进结果区（P1-5）**——已执行（刀36）** | `crates/editor/src/view/host/exec/{tx,pump,plan}.rs`；引擎侧 `duckdb/explain.rs` 复用 | 新用例：联邦源计划里「过滤在扫描节点之上」可被识别并渲染 |
+| 3 | 接 `ExplainAnalyzer` 进结果区（P1-5）**——已执行（刀36 + 刀37）** | `crates/editor/src/view/host/exec/{tx,pump,plan}.rs`；引擎侧 `duckdb/explain.rs` 复用并修正 | 新用例：联邦源计划里「过滤在扫描节点之上」可被识别并渲染；MySQL 的整句下推形态渲染为「整句下推 · 源端执行」（真机取证见 §5） |
 | 4 | 跨源类型降级提示（P0-3）**——部分执行（刀30）** | `engine/services/duckdb_service.rs`；预检侧列类型对照记 30b | Decimal256 直灌从「报错」改为「Arrow 层 cast 成 DOUBLE + 带列名的降级说明」（两条单测）；「同名列 join 给提示」需先补列类型事实，未做 |
 | 5 | 真机门控脚本（§5）**——已执行（刀31）** | `tools/real-db-gate.ps1` + `.rds/tmp/` 日志 | 五变量、三包逐包跑、日志按包落盘并汇总；engine 实测 `21 targets / 414 passed / 0 failed`（5 个门控变量未设 → 结论行明示「跨源未验证」）。顺带修掉两条阻塞级测试债（刀32 断言错、刀33 用例抢 `rds_src`） |
 
@@ -283,6 +299,8 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 | 刀34 | 2026-11-27 | 本地探针 `crates/workbench/tests/zz_fixture_probe.rs`：删掉 `ConnectRequest { use_duckdb_fed: Some(false) }` 一行（K4c 删字段时没跟着改，`error[E0560]`）。注意该文件被 `.gitignore:51 **/tests/zz_*.rs` 挡住、**不入库**，所以这一改只落在工作区，不产生代码提交 | `cargo test -p rds-workbench --tests -j 1 --no-run` → **Finished 6m20s**。随后该包因并行改动 `analytics_resource/service/table_asset.rs` 未闭合分隔符再次编译失败，与本审计无关 | 完成（本地环境） |
 
 | 刀36 | 2026-11-27 | 29b：`exec/tx.rs` 的本地通道（加速 / 联邦）改发 `EXPLAIN (FORMAT JSON)`（源库档仍按方言）；新增 `exec/plan.rs`——`explain_json_payload` 从两列回执抓计划正文，`plan_table` 用 `parse_json_plan` + `collect_source_scans` 先序展平成六列表（`层级 / 算子 / 对象 / 预估行数 / 下推 / 额外信息`），`flatten_explain_result` 在 `pump.rs` 的 `store.push` 之前改写，并把 `column_types` / `column_annotations` 置空、`key_columns` 清 `None`；标题常量 `EXPLAIN_TITLE` 与 `tx.rs` 同源 | `cargo check -p rds-editor -j 1` Finished 40.32s；新增 3 条用例全绿；`cargo test -p rds-editor --lib -j 1 -- --test-threads=1` **889 passed / 0 failed / 4 ignored** | 完成（P1-5 关闭） |
+
+| 刀37 | 2026-11-27 | 真机取证（MySQL 3306 + PG 5432 实连，Oracle 1521 未起）推翻刀29 的一条假设：MySQL 的外部源查询**只出** `MYSQL_QUERY`（整句下推），PG 简单查询出 `POSTGRES_SCAN`、本地 join / 表达式退化成 `POSTGRES_QUERY`。改 `duckdb/explain.rs`：`is_federated_operator` 纳入 `*_QUERY`；`SourceScanFacts` 增 `whole_statement`，整句下推时 `summary()` 给「整句下推 · 源端执行」而不是「投影未推」；`walk_source_scans` 对 `_QUERY` 形态不再按 `Projections` / `Filters` 硬判。editor 侧补一条 `MYSQL_QUERY` 展平用例 | `explain` 单测 19 passed；`cargo test -p rds-engine --lib -j 1 -- --test-threads=1` **357 passed / 0 failed**；editor `exec::plan::` **4 passed**；两文件 `rustfmt --check` 干净 | 完成（纠正刀29 假设） |
 
 **刀27 备注**
 

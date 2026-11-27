@@ -139,6 +139,28 @@ mod tests {
       }
     ]"#;
 
+    /// 真机（MySQL）实测的整句下推形态：只有一个 `MYSQL_QUERY` 节点，没有表名，
+    /// 「下推」列必须说清是整句下去了，而不是留空。
+    const WHOLE_PUSH_PLAN: &str = r#"[
+      {
+        "name": "MYSQL_QUERY",
+        "children": [],
+        "extra_info": {"Function": "MYSQL_QUERY", "Estimated Cardinality": "1"}
+      }
+    ]"#;
+
+    #[test]
+    fn whole_statement_pushdown_is_rendered_as_such() {
+        let plan = ExplainAnalyzer::parse_json_plan(WHOLE_PUSH_PLAN).expect("解析真实形状的计划");
+        let (_, rows) = plan_table(&plan);
+
+        assert_eq!(rows.len(), 1, "整句下推就一个节点");
+        assert_eq!(rows[0][1], "MYSQL_QUERY");
+        assert_eq!(rows[0][2], "", "表函数形态没有表名");
+        assert_eq!(rows[0][4], "整句下推 · 源端执行");
+        assert_eq!(rows[0][5], "Function=MYSQL_QUERY", "Function 不属于前三列");
+    }
+
     #[test]
     fn federated_scan_keeps_its_pushdown_verdict() {
         let plan = ExplainAnalyzer::parse_json_plan(FED_PLAN).expect("解析真实形状的计划");

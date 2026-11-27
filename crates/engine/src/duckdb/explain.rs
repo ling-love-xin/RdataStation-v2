@@ -44,8 +44,8 @@ pub enum PlanNodeType {
 impl PlanNodeType {
     /// 由 DuckDB 的 operator 名（`name` 字段）判定节点类型。
     ///
-    /// 外部源的扫描算子（`MYSQL_SCAN` / `ORACLE_QUERY` 等）**不**归为 `SeqScan`：
-    /// `has_full_table_scan` 的语义是「本地全表扫描」，远端源的扫描另有
+    /// 外部源算子（`MYSQL_QUERY` / `POSTGRES_SCAN` / `ORACLE_ATTACHED_SCAN` 等）**不**归为
+    /// `SeqScan`：`has_full_table_scan` 的语义是「本地全表扫描」，远端源的扫描另有
     /// [`SourceScanFacts`] 表达，混在一起会让性能提示给出错误结论。
     fn from_operator(operator: &str) -> Self {
         match operator {
@@ -158,12 +158,18 @@ impl PlanNode {
 /// 供结果区标注「投影已推 / 过滤未推」。判定依据只有计划结构本身：
 /// - 投影：扫描节点的 `extra_info` 里有非空 `Projections`；
 /// - 过滤：谓词若留在扫描节点**之上**，表现为从根到该节点的路径上出现 `FILTER`；
-///   若已下推进扫描，`extra_info` 里会有 `Filters`。
+///   若已下推进扫描，`extra_info` 里会有 `Filters`；
+/// - **整句下推**（`whole_statement`）：节点是 `MYSQL_QUERY` / `POSTGRES_QUERY` / `ORACLE_QUERY`
+///   这类**表函数形态**。此时 DuckDB 把整条 SELECT 交给源端执行，计划里既没有 `Table` 也没有
+///   `Projections` / `Filters`——投影与过滤的细节本地根本看不到，前三个字段恒 `false`，
+///   结论只能说「整句下推 · 源端执行」（2026-11-27 真机实测：MySQL 的**所有**外部源查询都是
+///   `MYSQL_QUERY`；PG 的简单查询是 `POSTGRES_SCAN`，带本地 join / 表达式时才退化成
+///   `POSTGRES_QUERY`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceScanFacts {
-    /// DuckDB operator 名（`MYSQL_SCAN` / `POSTGRES_SCAN` / `ORACLE_QUERY` …）
+    /// DuckDB operator 名（`MYSQL_QUERY` / `POSTGRES_SCAN` / `ORACLE_ATTACHED_SCAN` …）
     pub operator: String,
-    /// `extra_info["Table"]`（扫描节点通常带表名）
+    /// `extra_info["Table"]`（`_SCAN` 形态通常带表名；`_QUERY` 形态没有）
     pub table: Option<String>,
     /// 列投影是否下推（`extra_info["Projections"]` 非空）
     pub projections_pushed: bool,
@@ -171,11 +177,17 @@ pub struct SourceScanFacts {
     pub filters_inside_scan: bool,
     /// 扫描节点之上是否有 `FILTER`（谓词停在扫描之上，未下推）
     pub filter_above_scan: bool,
+    /// 整句下推（表函数形态 `*_QUERY`）：投影 / 过滤细节不可见
+    pub whole_statement: bool,
 }
 
 impl SourceScanFacts {
     /// 一句话结论，直接给面板/结果区用。
     pub fn summary(&self) -> String {
+        // 整句下推时再说「投影未推 / 无过滤」是编造：本地压根没拿到这两项事实
+        if self.whole_statement {
+            return "整句下推 · 源端执行".to_string();
+        }
         let projection = if self.projections_pushed {
             "投影已推"
         } else {
@@ -194,15 +206,18 @@ impl SourceScanFacts {
 
 /// 判断 operator 是否代表外部源（联邦/加速源）的读取。
 ///
-/// 本地算子（`SEQ_SCAN` / `INDEX_SCAN`）之外，DuckDB 的外部源算子统一以 `_SCAN` 结尾
-/// （`MYSQL_SCAN` / `POSTGRES_SCAN` / `SQLITE_SCAN` / `ORACLE_ATTACHED_SCAN` …）；
-/// Oracle 的表函数形态叫 `ORACLE_QUERY`，不带 `_SCAN`，单独按前缀识别。
+/// 本地算子（`SEQ_SCAN` / `INDEX_SCAN`）之外，DuckDB 的外部源算子有两族（2026-11-27 真机实测）：
+/// - **扫描形态** `*_SCAN`（`POSTGRES_SCAN` / `SQLITE_SCAN` / `ORACLE_ATTACHED_SCAN`）：
+///   计划里带 `Table` / `Projections` / `Filters`，可判下推；
+/// - **表函数形态** `*_QUERY`（`MYSQL_QUERY` / `POSTGRES_QUERY` / `ORACLE_QUERY`）：
+///   整句下推，细节不可见。MySQL 的所有外部源查询都走这一族（DuckDB 2.0.1 的 MySQL 扩展
+///   直接把它绑定成 `MYSQL_QUERY`），所以只认 `_SCAN` 会让「下推」列永远空白。
 pub fn is_federated_operator(operator: &str) -> bool {
     const LOCAL_OPERATORS: &[&str] = &["SEQ_SCAN", "INDEX_SCAN"];
     if LOCAL_OPERATORS.contains(&operator) {
         return false;
     }
-    operator.ends_with("_SCAN") || operator.starts_with("ORACLE_")
+    operator.ends_with("_SCAN") || operator.ends_with("_QUERY") || operator.starts_with("ORACLE_")
 }
 
 /// 查询计划分析器
@@ -392,15 +407,19 @@ impl ExplainAnalyzer {
         let node_is_filter = node.operator == "FILTER" || node.node_type == PlanNodeType::Filter;
 
         if is_federated_operator(&node.operator) {
+            // 表函数形态 = 整句下推：没有 Table / Projections / Filters，别把「没看到」当成「没推」
+            let whole_statement = node.operator.ends_with("_QUERY");
             out.push(SourceScanFacts {
                 operator: node.operator.clone(),
                 table: node.extra_info.get("Table").cloned(),
-                projections_pushed: node
-                    .extra_info
-                    .get("Projections")
-                    .is_some_and(|v| !v.trim().is_empty()),
-                filters_inside_scan: node.extra_info.contains_key("Filters"),
+                projections_pushed: !whole_statement
+                    && node
+                        .extra_info
+                        .get("Projections")
+                        .is_some_and(|v| !v.trim().is_empty()),
+                filters_inside_scan: !whole_statement && node.extra_info.contains_key("Filters"),
                 filter_above_scan: filter_on_path,
+                whole_statement,
             });
         }
 
@@ -736,7 +755,33 @@ mod tests {
         assert_eq!(facts[0].summary(), "投影已推 · 过滤已推");
     }
 
-    /// 跨源算子识别：本地算子/文件读取不算；各源 scanner 与 Oracle 表函数算。
+    /// 2026-11-27 真机（MySQL）实测的整句下推形态：`EXPLAIN (FORMAT JSON)` 只有一个
+    /// `MYSQL_QUERY` 节点，`extra_info` 里只有 `Function` 与 `Estimated Cardinality`。
+    /// 此处必须识别成外部源，并且**不能**用「投影未推 / 无过滤」替它说话。
+    #[test]
+    fn test_whole_statement_pushdown_is_not_a_missing_projection() {
+        let json = r#"[
+            {
+                "name": "MYSQL_QUERY",
+                "children": [],
+                "extra_info": {
+                    "Function": "MYSQL_QUERY",
+                    "Estimated Cardinality": "1"
+                }
+            }
+        ]"#;
+        let root = ExplainAnalyzer::parse_json_plan(json).expect("解析");
+        let facts = ExplainAnalyzer::collect_source_scans(&root);
+        assert_eq!(facts.len(), 1, "整句下推节点也要被认出来");
+        assert_eq!(facts[0].operator, "MYSQL_QUERY");
+        assert_eq!(facts[0].table, None, "表函数形态拿不到表名");
+        assert!(facts[0].whole_statement);
+        assert!(!facts[0].projections_pushed);
+        assert!(!facts[0].filters_inside_scan);
+        assert_eq!(facts[0].summary(), "整句下推 · 源端执行");
+    }
+
+    /// 跨源算子识别：本地算子/文件读取不算；各源 scanner 与表函数形态算。
     #[test]
     fn test_federated_operator_detection() {
         for op in [
@@ -745,6 +790,9 @@ mod tests {
             "SQLITE_SCAN",
             "ORACLE_ATTACHED_SCAN",
             "ORACLE_QUERY",
+            // 表函数形态（MySQL 的所有外部源查询都是这一族，PG 在本地 join / 表达式时退化到这族）
+            "MYSQL_QUERY",
+            "POSTGRES_QUERY",
         ] {
             assert!(is_federated_operator(op), "{op} 应判为外部源");
         }
