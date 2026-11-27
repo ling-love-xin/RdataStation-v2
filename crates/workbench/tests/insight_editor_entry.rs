@@ -151,14 +151,25 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
     };
 
     // 建连并设为活动连接（未绑定文档的执行就落到它上面）
+    // 驱动候选：插件驱动 `mysql` 没装时退到内核的 `mysql_native`（都是真库）
     let conn_id = runtime
         .block_on(async {
-            let mut config = DriverConnectionConfig::new("mysql");
-            config.name = Some("M8 编辑器入口探针".to_string());
-            config.url_override = Some(url.clone());
-            let (id, _db) = manager.create_connection_with_registry(config).await?;
-            manager.set_active_connection(id.clone()).await;
-            Ok::<String, shared::error::CoreError>(id)
+            let mut last_error = String::new();
+            for driver in ["mysql", "mysql_native"] {
+                let mut config = DriverConnectionConfig::new(driver);
+                config.name = Some(format!("M8 编辑器入口探针（{driver}）"));
+                config.url_override = Some(url.clone());
+                match manager.create_connection_with_registry(config).await {
+                    Ok((id, _db)) => {
+                        manager.set_active_connection(id.clone()).await;
+                        return Ok::<String, shared::error::CoreError>(id);
+                    }
+                    Err(error) => last_error = error.to_string(),
+                }
+            }
+            Err(shared::error::CoreError::common(
+                shared::error::CommonError::General(format!("mysql：建连失败 —— {last_error}")),
+            ))
         })
         .expect("建连");
 
@@ -270,13 +281,19 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
         );
     });
 
-    // 洞察侧：拿那段 SQL **重跑取样**（带 LIMIT）→ 列画像出真数
-    let source = cx.update(|cx| {
-        view.read(cx)
-            .target()
-            .and_then(|target| target.source().cloned())
-            .expect("面板目标应带源取样")
-    });
+    // 洞察侧：中间页宿主登记的待打开目标就是源目标（右栏对源目标只开确认窗、不落
+    // target —— 2026-11-05 真机循环后刻意如此），所以从宿主待办里取。
+    let target = shared
+        .pending_insight_target
+        .borrow()
+        .clone()
+        .expect("宿主应登记待打开目标");
+    let source = target.source().cloned().expect("待打开目标应带源取样");
+    eprintln!(
+        "✅ 端口 → 面板目标：连接 {:?} · 取样标签 {:?}",
+        source.conn_id(),
+        source.label()
+    );
     let (temp_table, profile) = insight::InsightService::profile_source_column(
         None,
         &source,

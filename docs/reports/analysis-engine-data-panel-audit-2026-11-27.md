@@ -261,6 +261,34 @@
 2. **secret manager 一旦被使用，`SET secret_directory` 就永久失效（刀40，P0）**。真机原话 `Invalid Input Error: Changing Secret Manager settings after the secret manager is used is not allowed!`，从 `AnalysisInstance::open_tagged` 的 `configure_connection` 抛出。成因不是测试专属：所有分析实例共用进程内的根库（`shared::duckdb_root::ensure` 返回同一个 `DuckDbRoot`），前一个实例挂过网络源（`CREATE SECRET`）之后 secret manager 即为「used」，后一个实例再配置就炸。**产品语义上等于「打开第二个文档」或「同文档挂第二个网络源」直接失败**，而错误信息只说配置失败，看不出是这条规矩。
    已实证的最小复现（`crates/store/src/duckdb_config.rs` 新单测）：同一内存库上 `configure` 两次都 OK；做一次 secret 操作（**哪怕 `CREATE SECRET` 本身失败**，manager 也被标成 used）后再 `configure` 就必错。修法：把 `secret_directory` 从批量设置里单拆出来，**只对这一句话对应的错误降级为 warn**（目录上一次已设成同一处，语义无变化），其余错误照旧致命——目录真写错仍会在挂源认证时以「找不到凭据」暴露。验收：`duckdb_config` 4 passed；`cargo test -p rds-engine --test duckdb_accel_probe`（MySQL + PG）**3 passed / 0 failed / 11.70s**（修前 1 failed）。
 
+**首次带真机变量跑 workbench —— 8 红，其中 1 条是本审计完全没看到的 P0**
+
+`tools/real-db-gate.ps1 -Packages rds-workbench`（同样只设 MySQL / PG）：
+
+| 包 | targets | passed | failed | 结论 |
+|---|---|---|---|---|
+| rds-workbench（修前） | 44 | 400 | 8 | 见下表归因 |
+| rds-workbench（刀42 后） | 44 | **404** | **4** | 剩 2 条并行 analytics 线、1 条本地探针、1 条真问题（见末行） |
+
+| 红 target | 现象 | 归因 |
+|---|---|---|
+| `data_source_lifecycle` | `save_without_federation_does_not_register_secret` | 并行 analytics 线改动，不属本审计 |
+| `ui_contract` | `shared_fields_are_whitelisted`「Shared 字段集变化」 | 同上 |
+| `zz_fixture_probe` | `Unknown connection URL parameter 'ssl-mode'` | **本地不入库探针**（`.gitignore:51`），CI 看不到 |
+| `insight_schema_real` / `insight_editor_entry` | `Driver 'postgres'/'mysql' not found` | 与刀39 同性质的老驱动 id；刀42 改为「同名 → 同名 `*_native`」候选 |
+| `insight_source_real` | MySQL `amount`（INT）被判 **Text**，PG 同列判 Numeric | **驱动层 P0**，见下 |
+| `editor_exec_real` | `CREATE TEMP TABLE … AS SELECT 42` 成功，紧接着 `SELECT answer FROM …` 报「表「rds_accel_vars」不存在：已挂载的源里都没有这张表」 | **真问题未修**：本地通道的 SQL 预检不认「本会话刚建的 TEMP 表」（错误文案出自 `editor/src/exec/preflight.rs`，不是 DuckDB 的 Catalog Error）。预检当前只有 `Result<(), String>`，没有「警告不阻断」出口（与 30b 同一障碍），修法需要产品口径 |
+
+**P0：`mysql_native` 把结果集全字符串化（刀42）**
+
+真机取证（临时探针走 `SqlService` + 原生驱动，`.gitignore` 挡住入库）：`SELECT CAST(1 AS SIGNED) AS amount_i, CAST(12.34 AS DECIMAL(12,2)) AS amount_d, 'x' AS note` 与 `SELECT id, status FROM mall_business.order` 在两个 MySQL 驱动（插件 `mysql` 与内核 `mysql_native`）下**每一列都是 `Utf8`**。
+
+根因：`mysql_native_rows_to_arrow` 按**行值**猜类型，而 `mysql_async` 文本协议把数值也回成 `Value::Bytes`，于是「最宽类型」恒为 Utf8。连带后果不止洞察判型：刀30 的 Decimal 降级判定、结果区列类型徽标、取样临时表保型全部失真（临时表成了全 VARCHAR）。
+
+修法：以列的**声明类型**为准 —— `Column::column_type()`（`mysql_async::consts::ColumnType`）映射成 Arrow：整型族（`TINY/SHORT/LONG/INT24/LONGLONG/YEAR`）→ `Int64`，`FLOAT/DOUBLE` → `Float64`，`DECIMAL/NEWDECIMAL` → `Float64`（保「数值列」判断，`Decimal128` 的精度/标度换算留待专用映射），其余 → `Utf8`；取值放宽（`Bytes` 可解析成 `i64`/`f64`）。**不做「只有 0/1 就判布尔」的启发**——实测会 `SELECT count(*)` 得 `"true"`（`count_rows` 直接红），声明类型说话即可。元数据缺失（如无行）时保留原「按值取最宽」兜底。
+
+验收：`rds-driver --lib` **95 passed / 0 failed / 8 ignored**；`insight_source_real` MySQL 由 `Text` → **`Numeric`**，`2 passed`；`insight_editor_entry` 2 passed；`insight_schema_real` 1 passed；`editor_exec_real` 的 `SELECT 1 AS n` 由 `"true"` 回到 `"1"`，MySQL / PG 的 native 段（执行 / 批量 / 中断 / 事务 / 错误定位 / 计划 / 分段 / 影响行数 / 下发源库 / 历史 / 超时 / 切 schema）**全部 ✅**。
+
 ---
 
 ## 6. 打磨顺序（五刀，均不动架构）

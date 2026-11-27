@@ -78,25 +78,43 @@ fn opts() -> SqlExecuteOptions {
     }
 }
 
+/// 真库用例的驱动候选：插件驱动（`mysql` / `postgres`，实现落在 `rds.driver.sqlx`）
+/// 没装时内核里只有同族的 `*_native`；两条都是真库，用例验的是洞察在真库上是否成立，
+/// 用哪条都一样。文件库（sqlite / duckdb）都是内置驱动，只有一条。
+fn driver_candidates(driver: &str, file: bool) -> Vec<String> {
+    if file || driver.ends_with("_native") {
+        vec![driver.to_string()]
+    } else {
+        vec![driver.to_string(), format!("{driver}_native")]
+    }
+}
+
 async fn connect(
     manager: &std::sync::Arc<engine::connection_manager::ConnectionManager>,
     target: &Target,
     value: &str,
 ) -> Option<String> {
-    let mut config = DriverConnectionConfig::new(target.driver);
-    config.name = Some(format!("M8 源取样探针（{}）", target.driver));
-    if target.file {
-        config.file_path = Some(value.to_string());
-    } else {
-        config.url_override = Some(value.to_string());
-    }
-    match manager.create_connection_with_registry(config).await {
-        Ok((conn_id, _db)) => Some(conn_id),
-        Err(error) => {
-            eprintln!("❌ {}：建连失败 —— {error}", target.driver);
-            None
+    let mut last_error = String::new();
+    for driver in driver_candidates(target.driver, target.file) {
+        let mut config = DriverConnectionConfig::new(&driver);
+        config.name = Some(format!("M8 源取样探针（{driver}）"));
+        if target.file {
+            config.file_path = Some(value.to_string());
+        } else {
+            config.url_override = Some(value.to_string());
+        }
+        match manager.create_connection_with_registry(config).await {
+            Ok((conn_id, _db)) => {
+                if driver != target.driver {
+                    eprintln!("ℹ️  {}：改用内核驱动 {driver}（插件驱动未装）", target.driver);
+                }
+                return Some(conn_id);
+            }
+            Err(error) => last_error = error.to_string(),
         }
     }
+    eprintln!("❌ {}：建连失败 —— {last_error}", target.driver);
+    None
 }
 
 /// 跑一句（建表 / 插数 / 清理用）

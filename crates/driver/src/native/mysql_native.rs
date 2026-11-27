@@ -285,10 +285,84 @@ async fn execute_writing(
 // Arrow 转换
 // ============================================================================
 
+/// 按列的**声明类型**决定 Arrow 类型。
+///
+/// 必须看声明，不能只看行值：`mysql_async` 走文本协议时数值也以 `Value::Bytes` 回，
+/// 按值猜会把 `INT` / `DECIMAL` 全判成字符串（真机实证：`CAST(1 AS SIGNED)` 得
+/// `Utf8`），下游（洞察判型 / 结果区列类型 / 取样保型）跟着一起失真。
+fn declared_arrow_type(column: &mysql_async::Column) -> DataType {
+    use mysql_async::consts::ColumnType;
+    match column.column_type() {
+        ColumnType::MYSQL_TYPE_TINY
+        | ColumnType::MYSQL_TYPE_SHORT
+        | ColumnType::MYSQL_TYPE_LONG
+        | ColumnType::MYSQL_TYPE_INT24
+        | ColumnType::MYSQL_TYPE_LONGLONG
+        | ColumnType::MYSQL_TYPE_YEAR => DataType::Int64,
+        ColumnType::MYSQL_TYPE_FLOAT | ColumnType::MYSQL_TYPE_DOUBLE => DataType::Float64,
+        // DECIMAL 不用 Arrow 的 Decimal128（精度/标度换算易错），先按浮点收，
+        // 保证「数值列」这一判断不丢；精度保真留待 DECIMAL 专用映射。
+        ColumnType::MYSQL_TYPE_DECIMAL | ColumnType::MYSQL_TYPE_NEWDECIMAL => DataType::Float64,
+        _ => DataType::Utf8,
+    }
+}
+
+/// 取值成 `i64`：文本协议下数值以字节串回来，必须能解析。
+fn value_as_i64(value: &mysql_async::Value) -> Option<i64> {
+    match value {
+        mysql_async::Value::Int(v) => Some(*v),
+        mysql_async::Value::UInt(v) => Some(*v as i64),
+        mysql_async::Value::Bytes(b) => std::str::from_utf8(b).ok()?.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// 取值成 `f64`：同上，允许从字节串解析。
+fn value_as_f64(value: &mysql_async::Value) -> Option<f64> {
+    match value {
+        mysql_async::Value::Float(v) => Some(*v as f64),
+        mysql_async::Value::Double(v) => Some(*v),
+        mysql_async::Value::Int(v) => Some(*v as f64),
+        mysql_async::Value::UInt(v) => Some(*v as f64),
+        mysql_async::Value::Bytes(b) => std::str::from_utf8(b).ok()?.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// 没有列元数据时的兜底：遍历行值取最宽类型（0=Null, 1=Bool, 2=Int64, 3=Float64, 4=Binary, 5=Utf8）。
+fn detect_by_values(rows: &[mysql_async::Row], col_idx: usize) -> u8 {
+    let mut detected_rank: u8 = 0;
+    for row in rows {
+        let val: mysql_async::Value = row.get(col_idx).unwrap_or(mysql_async::Value::NULL);
+        let row_rank = match &val {
+            mysql_async::Value::NULL => 0,
+            mysql_async::Value::Int(0) | mysql_async::Value::Int(1) if detected_rank < 1 => 1,
+            mysql_async::Value::Int(_) | mysql_async::Value::UInt(_) => 2,
+            mysql_async::Value::Float(_) | mysql_async::Value::Double(_) => 3,
+            mysql_async::Value::Bytes(b) => {
+                if std::str::from_utf8(b).is_ok() {
+                    5
+                } else {
+                    4
+                }
+            }
+            mysql_async::Value::Date(..) | mysql_async::Value::Time(..) => 5,
+        };
+        if row_rank > detected_rank {
+            detected_rank = row_rank;
+        }
+        if detected_rank == 5 {
+            break;
+        }
+    }
+    detected_rank
+}
+
 /// 将 mysql_async Row 转换为 Arrow 批处理
 fn mysql_native_rows_to_arrow(
     columns: &[String],
     rows: &[mysql_async::Row],
+    meta: Option<&[mysql_async::Column]>,
 ) -> Result<ArrowBatch, CoreError> {
     let num_rows = rows.len();
     let num_cols = columns.len();
@@ -301,80 +375,34 @@ fn mysql_native_rows_to_arrow(
         let mut bool_values: Vec<Option<bool>> = Vec::with_capacity(num_rows);
         let mut binary_values: Vec<Option<Vec<u8>>> = Vec::with_capacity(num_rows);
 
-        // 遍历所有行确定最宽类型（0=Null, 1=Bool, 2=Int64, 3=Float64, 4=Binary, 5=Utf8）
-        let mut detected_rank: u8 = 0;
-
-        for row in rows {
-            let val: mysql_async::Value = row.get(col_idx).unwrap_or(mysql_async::Value::NULL);
-            let row_rank = match &val {
-                mysql_async::Value::NULL => 0,
-                mysql_async::Value::Int(_) | mysql_async::Value::UInt(_) => {
-                    // Check if it could be a bool (0/1)
-                    match &val {
-                        mysql_async::Value::Int(0) | mysql_async::Value::Int(1)
-                            if detected_rank < 1 =>
-                        {
-                            1
-                        }
-                        _ => 2,
-                    }
-                }
-                mysql_async::Value::Float(_) | mysql_async::Value::Double(_) => 3,
-                mysql_async::Value::Bytes(b) => {
-                    if std::str::from_utf8(b).is_ok() {
-                        5
-                    } else {
-                        4
-                    }
-                }
-                mysql_async::Value::Date(..) | mysql_async::Value::Time(..) => 5,
-            };
-            if row_rank > detected_rank {
-                detected_rank = row_rank;
-            }
-            if detected_rank == 5 {
-                break; // Utf8 为最宽类型
-            }
-        }
-
-        // If the only non-null values are 0 and 1, treat as bool
-        let effective_type = match detected_rank {
-            1 => DataType::Boolean,
-            2 => DataType::Int64,
-            3 => DataType::Float64,
-            4 => DataType::Binary,
-            _ => DataType::Utf8,
+        // 有列元数据就按声明类型走（权威）；没有才退回「遍历行值取最宽类型」
+        let effective_type = match meta.and_then(|meta| meta.get(col_idx)) {
+            Some(column) => declared_arrow_type(column),
+            None => match detect_by_values(rows, col_idx) {
+                1 => DataType::Boolean,
+                2 => DataType::Int64,
+                3 => DataType::Float64,
+                4 => DataType::Binary,
+                _ => DataType::Utf8,
+            },
         };
 
         for row in rows {
             let val: mysql_async::Value = row.get(col_idx).unwrap_or(mysql_async::Value::NULL);
             match effective_type {
                 DataType::Boolean => {
-                    let b = match &val {
-                        mysql_async::Value::Int(1) => Some(true),
-                        mysql_async::Value::Int(0) => Some(false),
-                        mysql_async::Value::NULL => None,
+                    let b = match value_as_i64(&val) {
+                        Some(1) => Some(true),
+                        Some(0) => Some(false),
                         _ => None,
                     };
                     bool_values.push(b);
                 }
                 DataType::Int64 => {
-                    let i = match &val {
-                        mysql_async::Value::Int(v) => Some(*v),
-                        mysql_async::Value::UInt(v) => Some(*v as i64),
-                        mysql_async::Value::NULL => None,
-                        _ => None,
-                    };
-                    int_values.push(i);
+                    int_values.push(value_as_i64(&val));
                 }
                 DataType::Float64 => {
-                    let f = match &val {
-                        mysql_async::Value::Float(v) => Some(*v as f64),
-                        mysql_async::Value::Double(v) => Some(*v),
-                        mysql_async::Value::NULL => None,
-                        _ => None,
-                    };
-                    float_values.push(f);
+                    float_values.push(value_as_f64(&val));
                 }
                 DataType::Binary => {
                     let b = match &val {
@@ -492,7 +520,8 @@ fn build_query_result(
             Some(is_read_only),
         ));
     }
-    let batch = mysql_native_rows_to_arrow(columns, rows)?;
+    let meta = rows.first().map(|row| row.columns_ref());
+    let batch = mysql_native_rows_to_arrow(columns, rows, meta)?;
     Ok(QueryResult::with_batches(
         columns.to_vec(),
         vec![batch],
