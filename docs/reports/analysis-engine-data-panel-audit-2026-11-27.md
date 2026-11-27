@@ -360,6 +360,17 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 
 | 刀40 | 2026-11-28 | 修 P0：`crates/store/src/duckdb_config.rs` 的 `secret_directory` 改单条执行，仅对 `secret manager is used` 这一种错误降级为 warn —— 进程内根库共享，前一个实例挂过网络源后此设置永久不可改（真机原话 `Changing Secret Manager settings after the secret manager is used is not allowed!`），会让第二个文档 / 第二个网络源直接「配置分析实例失败」。新增两条单测（二次配置 OK / secret manager 用过后再配置不得失败） | `cargo test -p rds-store --lib duckdb_config` **4 passed**；`cargo test -p rds-engine --test duckdb_accel_probe`（MySQL+PG）**3 passed / 0 failed / 11.70s**（修前 1 failed） | 完成（P0 已修，真机验证） |
 
+| 刀41 | 2026-11-28 | 纯文档：§2.1 技术债逐条复核（Decimal256 已由刀30 销项、`duckdb_service.rs` `allow(dead_code)` 行号 361→396、`sql_parser_service.rs:172` 的 `dialect` 仍未参与切分），§2「类型保真」改为「半闭环（直灌侧已闭环）」，§1/§5 基线随刀39/40 更新 | 文档与代码逐条对照；无代码改动 | 完成（账做平） |
+
+| 刀42 | 2026-11-28 | 修 P0（本审计没看到的）：`mysql_native` 按**声明类型**出 Arrow，不再按行值猜。真机实证 `CAST(1 AS SIGNED)` / `DECIMAL` / `TINYINT` 全出 `Utf8`（`mysql_async` 文本协议把数值回成 `Value::Bytes`），导致洞察把 INT 判 Text、Decimal 降级判定与结果区列类型失真、取样临时表全 VARCHAR。改：`declared_arrow_type`（`ColumnType` → Arrow）、取值放宽到 `Bytes` 解析、**不做 0/1 判布尔启发**（会把 `count(*)` 得 `true`）。同时三个洞察真机套件在老驱动 id 上退到同族 `*_native`；`insight_editor_entry` 断言改读宿主待打开目标（源目标按设计不落右栏） | `rds-driver --lib` **95 passed**；gate engine **23/418/0**、database **5/332/0**、workbench **44/404/4**（8 红→4 红）；`insight_source_real` MySQL 由 Text→**Numeric** | 完成（P0 已修，真机验证） |
+
+**刀42 留下的红（未修，属下一刀）**
+
+- `editor_exec_real::the_editor_execution_port_runs_a_query_on_every_configured_database`：本地通道建 `TEMP TABLE` 成功，随后 `SELECT` 被**预检**拦成「表「rds_accel_vars」不存在：已挂载的源里都没有这张表」——预检不认本会话刚建的临时表；`check()` 只有 `Result<(), String>`，没有「警告不阻断」出口（与 30b 同一障碍）。
+- `data_source_lifecycle` / `ui_contract`：并行 analytics 线，不属本审计。
+- `zz_fixture_probe`：本地不入库探针（`ssl-mode` 参数不被识别），CI 无此文件。
+
+
 **刀27 备注**
 
 - 删除 `legacy` 自带的 11 条用例，故验收基线是 `345 = 356 − 11`，不是「356 不掉」。
