@@ -2080,6 +2080,20 @@ async fn g090_publish_file_is_file_first_and_base_guarded() {
         second.content_hash, first.content_hash,
         "改字节必须换 content_hash"
     );
+    let chain = env
+        .store
+        .global_file_versions("orders_file")
+        .expect("read global file version chain");
+    assert_eq!(chain.len(), 2, "两版文件都要出现在版本链里");
+    assert_eq!(chain[0].version, 1);
+    assert_eq!(chain[1].version, 2);
+    assert_eq!(chain[0].parent_version, None);
+    assert_eq!(chain[1].parent_version, Some(1));
+    assert!(!chain[0].content_pruned && !chain[1].content_pruned);
+    assert!(
+        chain[0].created_at.timestamp() > 0,
+        "created_at 必须解析成真实时间"
+    );
     let row = read_global_row(&env, "orders_file", None);
     assert_eq!(row.0, "file");
     assert!(row.1.is_none());

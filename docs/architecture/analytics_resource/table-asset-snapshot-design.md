@@ -409,8 +409,8 @@ manifest_id = sha256(canonical({
 | 保留与 GC | `global/sql.rs`、`global/delete.rs`、`table_asset/gc.rs`、`global/gc.rs`、`jobs/table_gc.rs` | 裁剪 / purge 只清引用行；后台 GC 按 24h grace 回收无引用快照 |
 | 删除旧表资产语义 | `table_asset.rs`（旧 `register` / `table_fingerprint`）、`global/promote.rs` 旧表链、`analytics_global_refs` 旧 name 列 | 已删除；全局表/数据文件均走快照，引用按 asset_id |
 | `存为表` 与归档拆分 | `crates/workbench/src/services/persist_jobs.rs`、数据对象面板入口 | 已实现 |
-| 版本历史 / 恢复入口 | `present/detail.rs`、`present/snapshot.rs`、`detail_view/actions.rs`、`detail_actions.rs` | 全局表版本链走 `table_asset_versions`、全局文件链走 `file_asset_versions`，都内联详情；时间线选中版可恢复为任意历史版本 |
-| 版本对比（schema / 行） | `table_asset/diff.rs`（新模块）、`jobs/version.rs`、`dialogs/version_diff.rs`、`dialogs/version/render.rs` | 项目侧版本对话框已放开表型对比：schema 列变化 + 有界行级差异（`EXCEPT ALL`，每侧最多 200 行，另算真实差异行数）；文件仍走文本 diff。全局表 / 全局文件暂无独立版本对话框，只提供详情时间线与任意版本恢复 |
+| 版本历史 / 恢复入口 | `present/detail.rs`、`present/snapshot.rs`、`detail_view/actions.rs`、`detail_actions.rs` | 全局表版本链走 `table_asset_versions`、全局文件链走 `file_asset_versions`，都内联详情；详情时间线显示最近 3 条，选中版可恢复为 vN+1；任意版本列表未做 |
+| 版本对比（schema / 行） | `table_asset/diff.rs`（新模块）、`jobs/version.rs`、`dialogs/version_diff.rs`、`dialogs/version/render.rs` | 项目侧版本对话框已放开表型对比：schema 列变化 + 有界行级差异（`EXCEPT ALL`，每侧最多 200 行，另算真实差异行数）；文件仍走文本 diff。全局表 / 全局文件暂无独立版本对话框，只在详情时间线恢复可见版本（最近 3 条），也不提供版本对比入口 |
 
 > 本文是设计定稿，上表是落码映射（状态列区分已实现与仍留）。落地时直接替换旧表资产路径，**不建立旧数据迁移、不保留双读双写或 feature flag**；每刀完成后同步 `README.md` 与 `file-asset-cas-implementation-plan.md` 的边界说明。
 
@@ -425,12 +425,12 @@ manifest_id = sha256(canonical({
 - 引用：按 `global_asset_id + version` 登记；显示名可改，固化按 asset_id 解析当前名。
 - 验证：`rds-analytics-resource` 全量测试（见 `.rds/tmp/analytics-test.log` 及后续复跑）；`rds-workbench` / `rds-sql` / `rds-engine` 编译与相关测试见各轮日志。
 
-已接通：全局发布 `base_global_version` → `StaleBase` → 分叉对话框；`rds_archive` SQL 只读闸门；`arc_/wrk_` 枚举过滤；独立表快照 GC；全局表 / 全局文件版本链内联详情与任意历史版本恢复；项目表版本对比（schema + 行级 diff）。
+已接通：全局发布 `base_global_version` → `StaleBase` → 分叉对话框；`rds_archive` SQL 只读闸门；`arc_/wrk_` 枚举过滤；独立表快照 GC；全局表 / 全局文件版本链内联详情与最近可见版本恢复；项目表版本对比（schema + 行级 diff）。
 
-仍留：全局表 / 全局文件没有独立版本历史对话框（按 §13.4 的入口收敛，只在详情时间线看最近版本）；表 diff 的行级差异对超大表仍是全表 `EXCEPT ALL`，未加超时 / 采样阈值。
+仍留：全局表 / 全局文件没有独立版本历史对话框，也没有版本对比入口（按 §13.4 的入口收敛，只在详情时间线看最近 3 条）；表 diff 的行级差异对超大表仍是全表 `EXCEPT ALL`，未加超时 / 采样阈值。
 
 ### 12.2 版本对比与全局文件历史（2026-11-27 收口）
 
 - **表版本对比**：`table_asset/diff.rs::table_version_diff` 先解析两版 `TableManifest.schema_json`，比较列新增 / 删除 / 类型·可空·默认值变化；仅当两侧列名与类型可逐列对齐时，才用 `SELECT … EXCEPT ALL SELECT …` 取旧版独有 / 新版独有，单侧最多列出 `ROW_DIFF_LIMIT = 200` 行，另用 `count(*)` 得到真实差异行数。快照 `Missing` 或物理表不存在会明确报错，不静默当成“无差异”；同 manifest 直接拒绝，不伪造 patch。
 - **表版本对比接线**：`jobs/version.rs::load_version_diff` 按 `ArchiveKind` 分流。表走 `table_asset_versions` → 两版 manifest / snapshot，并通过 `open_service_with_manager` 保活 `ProjectDatabaseManager`，借项目 DuckDB 连接读快照；文件沿用原 manifest 文本 + `unified_patch`。`dialogs/version_diff.rs` 增加 `VersionDiffKind` 与摘要行，`dialogs/version/render.rs` 去掉表型禁对比的判断。
-- **全局文件版本历史**：`global/file.rs::global_file_versions` 读 `file_asset_versions` 全链（升序）；刷新时 `load_global_view` 同时取全局表与全局文件两套版本索引，`present::DetailExtras.file_versions` 只对全局文件行填实际链；详情时间线按版本降序取最近 3 条，`content_pruned` 决定节点是否可还原，「可还原副本」由未裁剪版本组成。
+- **全局文件版本历史**：`global/file.rs::global_file_versions` 按全局名聚合 `file_asset_versions` 全链（升序）——文件每升一版都新建一条 `analytics_resources` 行，`resource_id` 不是稳定链键，必须 join 回 `name + scope='global'`；刷新时 `load_global_view` 同时取全局表与全局文件两套版本索引，`present::DetailExtras.file_versions` 只对全局文件行填实际链；详情时间线按版本降序取最近 3 条，`content_pruned` 决定节点是否可还原，「可还原副本」由未裁剪版本组成。

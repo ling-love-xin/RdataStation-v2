@@ -137,7 +137,8 @@
 草稿箱：写项目 `checkout_leases`（`base_scope='global'`、key `global:<name>`）并在全局
 `global_checkout_leases` 记一条跨项目守卫；全局 `purge` 前必须无活跃取回。该草稿归档为项目资产时，
 项目侧与全局侧租约一起结清。全局文件同样可进回收站，历史版本恢复从 manifest 生成新 head（不原地回滚）。
-全局文件的历史链由 `global/file.rs::global_file_versions` 读 `file_asset_versions`，刷新后随
+全局文件的历史链由 `global/file.rs::global_file_versions` 按全局名聚合 `file_asset_versions`
+（文件每升一版都新建一条 resource 行，`resource_id` 不是稳定链键），刷新后随
 `present::DetailExtras.file_versions` 进详情时间线（最近 3 条，`content_pruned` 标记是否还能恢复）；
 全局表仍走 `table_asset_versions`。全局侧只在详情时间线收敛入口，没有独立版本历史对话框。
 
@@ -244,9 +245,9 @@ pin 全局版本（`global/refs.rs`、迁移 `global/038_analytics_global_refs.s
 | **全局实例删除 → 回收站**【2026-11-26】`trash_global` 只软删当前活跃行、表与版本快照保留，manifest 落 `data/trash/global/`；`restore_global` 先校验表在再复活登记；`purge_global` 才逐张 `DROP` 同名各版表并清单 / 登记 / 分发回执；UI 动作改「移入全局回收站…」；**`delete_global` 旧硬删入口已撤**，全局删除只剩「移入 → 回收站永久删除」一条路 | 回收站 TTL；被 pin 跳过只在回执报数 |
 | **全局 file-first**【2026-11-27】`global/file.rs`：`publish_file` 从项目 manifest 导入全局 CAS（按 hash 去重），全局行 `kind='file'`、`analytics_table=NULL`；无 manifest 的旧源文件现算单文件清单。`base_global_version` 不匹配返回 `StaleBase`，不覆盖 head；`fork_file` 复用 manifest 生成新资产、原 head 不动；`checkout_file` 物化到项目草稿并写项目/全局两道 lease；`distribute` 对文件行从 CAS 物化，不再要求内容表存在；`restore_file_version` 从历史 manifest 生成新 head。迁移 `global/040` | 旧 `analysis + file` 混合行迁移、派生表独立创建留 M5 |
 | **全局文件回收站与取回守卫**【2026-11-27】`trash_global` 可收文件型（当前物化本体进 `data/trash/global`，CAS 对象跨版本共享不搬），`restore_global` 移回，`purge_global` 前检查 `global_checkout_leases` 活跃取回（有则 `LeaseActive`）；`global_trash_root` 从 `system_dir.parent()/trash/global` 推导，测试隔离 | TTL；按来源分组 / 筛选 |
-| **项目文件任意两版对比**【2026-11-27】版本历史对话框 Shift+点一行设「对比基准」（再点取消），选中另一行后「与基准 vN 对比…」；两版由后端按版本号排成旧→新，旧侧 / 新侧都走 manifest 物化（新侧是当前版本时读本体）；同一版拒绝对比 | 全局文件版本历史仍只提供「恢复上一版文件…」，不复用此入口 |
-| **全局文件历史版本恢复**【2026-11-27】只认 manifest：`restore_file_version` 从历史 manifest 生成新 head（旧版行与 CAS 对象保留）；无 manifest 的旧版本直接拒绝恢复，旧 `resources/versions/<asset>/vN` 回退已删除。详情全局行在版本 > 1 时提供「恢复上一版文件…」 | 任意版本选择 UI |
-| **全局表历史版本恢复**【2026-11-26】`restore_global_table_version(name, N)` 从快照取旧表名，校验旧表还在后 `CREATE TABLE rds_global.<新表> AS SELECT * FROM rds_global.<旧表>`，软删旧活跃行、登记新版本（版本号 +1）；旧表 / 旧登记 / 快照全留；旧表被裁或快照缺表名明确拒绝；文件型走 `restore_global_file_version`；详情全局表型行在版本 > 1 时提供「恢复上一版表…」 | 任意版本选择 UI |
+| **项目文件任意两版对比**【2026-11-27】版本历史对话框 Shift+点一行设「对比基准」（再点取消），选中另一行后「与基准 vN 对比…」；两版由后端按版本号排成旧→新，旧侧 / 新侧都走 manifest 物化（新侧是当前版本时读本体）；同一版拒绝对比 | 全局文件 / 全局表没有独立版本历史对话框，也没有版本对比入口；只在详情时间线恢复可见历史版本 |
+| **全局文件历史版本恢复**【2026-11-27】只认 manifest：`restore_file_version` 从历史 manifest 生成新 head（旧版行与 CAS 对象保留）；无 manifest 的旧版本直接拒绝恢复，旧 `resources/versions/<asset>/vN` 回退已删除。详情时间线读 `file_asset_versions` 最近 3 条，选中可还原版即「恢复为 vN+1」；无选中版时才回退到「恢复上一版文件…」 | 独立版本历史 / 任意版本列表（当前只看详情时间线最近 3 条） |
+| **全局表历史版本恢复**【2026-11-26】`restore_global_table_version(name, N)` 从快照取旧表名，校验旧表还在后 `CREATE TABLE rds_global.<新表> AS SELECT * FROM rds_global.<旧表>`，软删旧活跃行、登记新版本（版本号 +1）；旧表 / 旧登记 / 快照全留；旧表被裁或快照缺表名明确拒绝；文件型走 `restore_global_file_version`；详情时间线读 `table_asset_versions` 最近 3 条，选中可还原版即「恢复为 vN+1」；无选中版时才回退到「恢复上一版表…」 | 独立版本历史 / 任意版本列表（当前只看详情时间线最近 3 条） |
 | **来源链浏览 + 分发谱系**【刀 3 + 2026-11-25】`origin_kind` + `origin_ref` 记**直接上游**那一跳（全局行 `project` + 资源 id/版本；项目行 `global` + 实例/版本），详情「来源」区多一行「上游」；详情动作区「查看来源链…」按 id 在面板快照里逐跳往上追（最多 8 跳、防环；上游不在快照时如实灰显并注明可能已删除或在别的项目）；分发成功后补记 `derived_from`（项目产物 → 全局上游，失败只告警不回滚分发） | 升级路径尚无 `derived_from`（产物落在全局库，项目侧没有对应行可挂） |
 | **表型升级**【刀 5c + 2026-11-26】本体是项目分析库里一张表的存档也能升级：所有权收口后项目库与全局库同根，项目会话直接 `CREATE TABLE rds_global.<版本表> AS SELECT * FROM analytics.<源表>`；冲突 / 覆盖 / 版本号 / 登记 / 裁剪与文件型升级同口径；不再导出 parquet、不再先锁进程单例 | — |
 | **数据对象面板的单一升级路径**【刀 7 / 刀 12】场景 3 在面板里闭环：会话表（结果集 / 洞察产物）→「存为表」（整表搬进项目库，成功顺手重取面板清单）。面板上**只有这一条升级路径**——「升级」的唯一含义是临时对象 → 项目持久表；全局升级入口在资产库：详情动作区与列表右键「升级到全局…」（`detail_actions::request_promote_to_global`），刀 12 撤掉了面板里那个第二个入口（同一动作两处语义会互相打脸） | 面板不再提供全局升级；文件型与表型资产都走资产库那两条入口 |

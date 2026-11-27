@@ -371,13 +371,18 @@ async fn load_global_view() -> (
             }
             continue;
         }
-        match store.global_file_versions(&resource.id) {
+        match store.global_file_versions(&resource.name) {
             Ok(list) if !list.is_empty() => {
                 file_versions.insert(resource.id.clone(), list);
             }
             Ok(_) => {}
             Err(error) => {
-                tracing::warn!(error = %error, asset_id = %resource.id, "读取全局文件版本链失败");
+                tracing::warn!(
+                    error = %error,
+                    asset_id = %resource.id,
+                    name = %resource.name,
+                    "读取全局文件版本链失败"
+                );
             }
         }
     }

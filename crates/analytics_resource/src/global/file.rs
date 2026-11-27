@@ -102,24 +102,28 @@ impl GlobalInstanceStore {
     }
 
     /// 某全局文件资产的完整版本索引（升序），供详情时间线展示历史。
+    ///
+    /// 文件资产每升一版就新建一条 `analytics_resources` 行，`resource_id` 不是稳定链键；
+    /// 版本链按全局名（同一资产的所有版本共用 `name` + `scope='global'`）聚合。
     pub(crate) fn global_file_versions(
         &self,
-        resource_id: &str,
+        name: &str,
     ) -> Result<Vec<crate::store::file_asset::FileAssetVersion>, CoreError> {
         self.with_sqlite(|conn| {
             let mut stmt = conn
                 .prepare(
                     r#"
-                    SELECT resource_id, version, manifest_id, content_hash, meta_hash,
-                           parent_version, content_pruned, created_at
-                    FROM file_asset_versions
-                    WHERE resource_id = ?1
-                    ORDER BY version ASC
+                    SELECT fav.resource_id, fav.version, fav.manifest_id, fav.content_hash, fav.meta_hash,
+                           fav.parent_version, fav.content_pruned, fav.created_at
+                    FROM file_asset_versions fav
+                    JOIN analytics_resources ar ON ar.id = fav.resource_id
+                    WHERE ar.name = ?1 AND ar.scope = 'global'
+                    ORDER BY fav.version ASC
                     "#,
                 )
                 .map_err(sqlite_err("prepare_global_file_versions"))?;
             let rows = stmt
-                .query_map(rusqlite::params![resource_id], map_global_file_version)
+                .query_map(rusqlite::params![name], map_global_file_version)
                 .map_err(sqlite_err("query_global_file_versions"))?;
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(sqlite_err("collect_global_file_versions"))
