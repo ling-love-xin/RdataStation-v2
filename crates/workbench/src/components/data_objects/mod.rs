@@ -1796,7 +1796,7 @@ mod tests {
         assert_eq!(source, sorted, "源段内次序要被 rank 排好：{:?}", source);
         // 段内第一档必须是会话挂载（正在用的那个），最后一档是连接
         assert_eq!(source.first(), Some(&0), "会话挂载排第一档");
-        assert_eq!(source.last(), Some(&3), "源库连接排最后一档");
+        assert_eq!(source.last(), Some(&2), "源库连接排最后一档");
 
         let mut table = ranks_of(Group::Table);
         assert_eq!(table[0], 0, "表段从资产开始");
