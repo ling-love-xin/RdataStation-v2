@@ -28,10 +28,14 @@ use rds_database::metadata_service::MetadataService;
 const TABLE_STEM: &str = "rds_ddl_probe";
 
 /// 建一条真机连接并注册进管理器（`MetadataService` 从这里取连接）。
-async fn manager_with(url: &str, driver: &str) -> Arc<ConnectionManager> {
+///
+/// `None` = 这个驱动 id 在本进程里没有实现：`mysql` / `postgres` 已剥离到侧车插件
+/// （`rds.driver.sqlx`），内核注册表只有 `mysql_native` / `postgres_native`
+/// （口径见 `driver/src/auto_register.rs` 的单测）。插件没装时用例跑不了，
+/// 交回 `None` 让调用方按「跳过」处理 —— 不该报成「驱动应在注册表里」的失败。
+async fn manager_with(url: &str, driver: &str) -> Option<Arc<ConnectionManager>> {
     AutoDriverRegistrar::auto_register();
-    let factory =
-        DriverRegistry::get(driver).unwrap_or_else(|| panic!("驱动 {driver} 应在注册表里"));
+    let factory = DriverRegistry::get(driver)?;
     let mut config = DriverConnectionConfig::new(driver);
     config.name = Some("ddl-probe".to_string());
     config.url_override = Some(url.to_string());
@@ -64,7 +68,7 @@ async fn manager_with(url: &str, driver: &str) -> Arc<ConnectionManager> {
         )
         .await
         .expect("注册连接");
-    manager
+    Some(manager)
 }
 
 /// 列详情要带出「第几列」与「引到哪」：属性面板的 `#` 与「引用」两列靠它。
@@ -106,7 +110,10 @@ async fn composed_ddl_from_a_real_postgres_schema() {
         eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
         return;
     };
-    let manager = manager_with(&url, "postgres").await;
+    let Some(manager) = manager_with(&url, "postgres").await else {
+        eprintln!("⏭️  驱动 postgres 未注册（本进程没有该实现），跳过");
+        return;
+    };
     let key = "ddl-probe".to_string();
     let table = format!("{TABLE_STEM}_pg");
 
@@ -181,7 +188,10 @@ async fn composed_ddl_from_a_real_sqlite_schema() {
         eprintln!("⏭️  未设 RDS_TEST_SQLITE_PATH，跳过");
         return;
     };
-    let manager = manager_with(&path, "sqlite").await;
+    let Some(manager) = manager_with(&path, "sqlite").await else {
+        eprintln!("⏭️  驱动 sqlite 未注册（本进程没有该实现），跳过");
+        return;
+    };
     let key = "ddl-probe".to_string();
     let table = format!("{TABLE_STEM}_sqlite");
     let db = manager.get_connection(&key).await.expect("取连接");
@@ -249,7 +259,10 @@ async fn composed_ddl_from_a_real_mysql_schema() {
         eprintln!("⏭️  未设 RDS_TEST_MYSQL_URL，跳过");
         return;
     };
-    let manager = manager_with(&url, "mysql").await;
+    let Some(manager) = manager_with(&url, "mysql").await else {
+        eprintln!("⏭️  驱动 mysql 未注册（本进程没有该实现），跳过");
+        return;
+    };
     let key = "ddl-probe".to_string();
     let table = format!("{TABLE_STEM}_mysql");
     let db = manager.get_connection(&key).await.expect("取连接");
@@ -321,7 +334,10 @@ async fn composed_ddl_from_a_real_duckdb_schema() {
         eprintln!("⏭️  未设 RDS_TEST_DUCKDB_PATH，跳过");
         return;
     };
-    let manager = manager_with(&path, "duckdb").await;
+    let Some(manager) = manager_with(&path, "duckdb").await else {
+        eprintln!("⏭️  驱动 duckdb 未注册（本进程没有该实现），跳过");
+        return;
+    };
     let key = "ddl-probe".to_string();
     let table = format!("{TABLE_STEM}_duckdb");
     let db = manager.get_connection(&key).await.expect("取连接");
@@ -380,7 +396,10 @@ async fn composed_ddl_from_a_real_official_postgres_schema() {
         eprintln!("⏭️  未设 RDS_TEST_PG_URL，跳过");
         return;
     };
-    let manager = manager_with(&url, "postgres_native").await;
+    let Some(manager) = manager_with(&url, "postgres_native").await else {
+        eprintln!("⏭️  驱动 postgres_native 未注册（本进程没有该实现），跳过");
+        return;
+    };
     let key = "ddl-probe".to_string();
     let table = format!("{TABLE_STEM}_pgnative");
     let db = manager.get_connection(&key).await.expect("取连接");
@@ -430,7 +449,10 @@ async fn composed_ddl_from_a_real_official_mysql_schema() {
         eprintln!("⏭️  未设 RDS_TEST_MYSQL_URL，跳过");
         return;
     };
-    let manager = manager_with(&url, "mysql_native").await;
+    let Some(manager) = manager_with(&url, "mysql_native").await else {
+        eprintln!("⏭️  驱动 mysql_native 未注册（本进程没有该实现），跳过");
+        return;
+    };
     let key = "ddl-probe".to_string();
     let table = format!("{TABLE_STEM}_mysqlnative");
     let db = manager.get_connection(&key).await.expect("取连接");

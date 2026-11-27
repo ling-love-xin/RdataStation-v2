@@ -25,10 +25,11 @@ use rds_database::metadata_service::MetadataService;
 /// 探针对象名（跑完即删，不留痕）。
 const STEM: &str = "rds_nav_probe";
 
-async fn manager_with(url: &str, driver: &str) -> Arc<ConnectionManager> {
+async fn manager_with(url: &str, driver: &str) -> Option<Arc<ConnectionManager>> {
     AutoDriverRegistrar::auto_register();
-    let factory =
-        DriverRegistry::get(driver).unwrap_or_else(|| panic!("驱动 {driver} 应在注册表里"));
+    // `postgres` 的实现已剥离到侧车插件（`rds.driver.sqlx`），内核只有 `postgres_native`；
+    // 插件没装时取不到工厂 —— 这是「这条跑不了」，不是用例失败。
+    let factory = DriverRegistry::get(driver)?;
     let mut config = DriverConnectionConfig::new(driver);
     config.name = Some("nav-probe".to_string());
     config.url_override = Some(url.to_string());
@@ -61,7 +62,7 @@ async fn manager_with(url: &str, driver: &str) -> Arc<ConnectionManager> {
         )
         .await
         .expect("注册连接");
-    manager
+    Some(manager)
 }
 
 /// 两个驱动跑同一批断言（sqlx 与 Official 各一份 SQL，容易只改一边）。
@@ -71,7 +72,10 @@ async fn nav_introspection_cases(driver: &str) {
         return;
     };
     println!("\n=== {driver} ===");
-    let manager = manager_with(&url, driver).await;
+    let Some(manager) = manager_with(&url, driver).await else {
+        eprintln!("⏭️  驱动 {driver} 未注册（本进程没有该实现），跳过");
+        return;
+    };
     let key = "nav-probe".to_string();
     let db = manager.get_connection(&key).await.expect("取连接");
     let svc = MetadataService::new(Arc::clone(&manager));
