@@ -83,9 +83,8 @@ pub use services::connection_probe::{test_connection, test_connection_result};
 
 // 重新导出 DuckDB 分析引擎模块
 pub use duckdb::{
-    DataFormat, DataSourceConfig, DataSourceType, DuckDBExecutor, DuckDBManager, DuckDBResult,
-    ExplainAnalyzer, ExportConfig, FTSManager, FederationManager, ImportConfig,
-    ImportExportManager, PlanNode, PlanNodeType, PluginConnection, PluginManager,
-    PluginPermissionLevel, TempTableConfig, TempTableManager, TempTableSource,
+    DataFormat, DuckDBExecutor, DuckDBManager, DuckDBResult, ExplainAnalyzer, ExportConfig,
+    FTSManager, ImportConfig, ImportExportManager, PlanNode, PlanNodeType, PluginConnection,
+    PluginManager, PluginPermissionLevel, TempTableConfig, TempTableManager, TempTableSource,
     file_reader_function,
 };

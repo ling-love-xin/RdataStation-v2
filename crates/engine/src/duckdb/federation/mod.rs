@@ -25,6 +25,8 @@
 //! # 硬约束（改这个模块前先读 `docs/architecture/federation/README.md`）
 //!
 //! 1. **一律只读**：外部源只以 `READ_ONLY` 挂载（写语义未定义就不开放）；本地临时对象照常允许；
+//!    **例外只有 L2 Oracle**——社区扩展不接受 `read_only`，由会话层拒写 + 只读账号兜底
+//!    （`session.rs::l2_write_refusal`，台账见 `federation-architecture.md` §2.1）；
 //! 2. **扩展显式管理**：关掉 DuckDB 的 `autoinstall_known_extensions` /
 //!    `autoload_known_extensions`（**实测默认 `true`**：SQL 里一出现扩展函数名就静默联网下载），
 //!    由本模块显式安装并如实报状态；扩展目录钉在应用数据目录（可离线预置）；
@@ -37,14 +39,11 @@
 //!
 //! # 现状
 //!
-//! 目录已落位（本文件 + `legacy` / `registry` / `session` / `bridge`）。
+//! 目录已落位（本文件 + `registry` / `session` / `bridge`）。
 //! **第一期已经能用**：`registry`（源描述 / 别名 / 快照）与 `session`（多源只读挂载 +
 //! 进程内会话缓存）已落地，执行路径在 `workbench/services/editor_exec.rs` 的联邦分支上；
 //! `bridge`（L3 桥接）仍只有接口草案，见 `docs/architecture/federation/federation-dev-plan.md`。
 
 pub mod bridge;
-pub mod legacy;
 pub mod registry;
 pub mod session;
-
-pub use legacy::{DataSourceConfig, DataSourceType, FederationManager};

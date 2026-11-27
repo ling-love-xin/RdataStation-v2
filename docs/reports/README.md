@@ -9,6 +9,7 @@
 | `integration-test-report-<日期>.md` | 整体联动集成测试全量报告（含逐包对照、修复记录、缺口清单） |
 | `integration-test-report-incremental-<日期>.md` | 增量复验报告（相对上一份的差异） |
 | `integration-task-next.md` | 下一会话独立任务说明（自包含：前置状态 / 环境要点 / 执行步骤 / 验收口径） |
+| `analysis-engine-data-panel-audit-<日期>.md` | 分析引擎 + 数据面板完成度审计（分域判定 / 缺口分级 / 打磨顺序 / 证据强度） |
 
 ## 命名约定
 

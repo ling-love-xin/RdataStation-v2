@@ -61,7 +61,6 @@ pub mod value_text {
 // 导出所有核心类型
 pub use executor::{DuckDBExecutor, DuckDBResult};
 pub use explain::{ExplainAnalyzer, PlanNode, PlanNodeType};
-pub use federation::{DataSourceConfig, DataSourceType, FederationManager};
 pub use manager::{DuckDBManager, MemoryStats};
 pub use metrics::{DuckDBMetrics, MetricsSnapshot};
 
