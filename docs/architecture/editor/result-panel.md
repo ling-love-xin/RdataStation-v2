@@ -10568,10 +10568,11 @@ element 是 `Collection` 就返回 `col.toArray()`）。
 3. **非法字面量**：真值侧值本身是 `DBDCollection`（不存在「不是数组」）；本仓值是驱动
    文本，解析失败按普通文本画。
 4. **子行元素对齐**：按列 `Array` → 文本族左对齐，不按元素自身数值类型右对齐。
-5. **深层子行没有缩进**：真值 `GridRowRenderer:73-86` 按 `LEVEL_SPACING`（= 图标宽）逐级右移
-   行头三角与行号；本仓行号槽固定 48px、槽内只画一个三角，层级只体现在行号文本
-   （`1.1.1`）上。逐级缩进需要行号槽按层级加宽，与固定槽宽冲突，暂不做。
-   （原记的「二级展开未做」已在 2026-11-27 补齐，见 §9.70.3。）
+5. **深层子行没有缩进、行号槽也不给三角**：真值 `GridRowRenderer:73-86` 按 `LEVEL_SPACING`
+   （= 图标宽）逐级右移行头三角与行号，且每层行头都有展开三角；本仓行号槽固定 48px、
+   槽内只画一个三角且只对底层数据行生效（子行的展开靠「单元格内的三角」，真值无这一层），
+   层级只体现在行号文本（`1.1.1`）上。逐级缩进需要行号槽按层级加宽，与固定槽宽冲突，
+   暂不做。（原记的「二级展开未做」已在 2026-11-27 补齐，见 §9.70.3。）
 
 #### 9.70.6 验证
 
@@ -10982,14 +10983,12 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 
 #### 20.8.1 仍缺 · 本仓可做（不碰 vendor、不等模型）
 
-**本档已清空。** 最后一格「多维数组二级展开」于 2026-11-27 落地：展开状态从
-`BTreeMap<(data_row, column), Vec<String>>` 改成条目表 `Vec<ArrayExpansion>`（条目带
-`path` 下钻链），`RowRef::ArrayChild` 保持 `Copy`（只留 `key/index/sub_index`），铺平改递归、
-行号按父链逐级拼、子行元素自身是数组同样给三角。见 §9.70.3。
-
-**本轮已从此档移出（2026-11-27，续）**：多维数组二级展开——原记的落点「要改成层级键」
-成立，实现与用例见 §9.70.3 与 `crates/result_panel/src/grid/tests.rs` 的
-`nested_array_expands_level_by_level`。
+**本档已清空。** 最后一格「多维数组二级展开」于 2026-11-27 落地：原记的落点「要改成
+层级键」成立，展开状态从 `BTreeMap<(data_row, column), Vec<String>>` 改成条目表
+`Vec<ArrayExpansion>`（条目带 `path` 下钻链），`RowRef::ArrayChild` 保持 `Copy`
+（只留 `key/index/sub_index`），铺平改递归、行号按父链逐级拼、子行元素自身是数组同样
+给三角。实现见 §9.70.3，用例 `nested_array_expands_level_by_level`
+（`crates/result_panel/src/grid/tests.rs`）钉住「1.1/1.2 → 1.1.1/1.1.2 → 收父连子树消失」。
 
 **本轮已从此档移出（2026-11-27）**：获焦列四边框——原位记的落点（`delegate.cell_range().cursor().1`）
 成立，实现用的是绝对定位覆盖层而不是 `.border_*`（理由与残余 1px 口径见 §9.72.3 第 5 条），
