@@ -175,7 +175,8 @@ CREATE INDEX IF NOT EXISTS idx_analysis_sources_kind ON analysis_sources(kind);
 - 登记表达的是**项目级意图**（切项目还在）；挂载是**运行态事实**（切项目清）。
   两者不合并成一步，也不互相替代——「未挂载 · 项目级」这一格正是二者之差。
 - 三条执行通道（源库直连 / 本地加速 / 联邦）与 `use_duckdb_fed` 的关系：
-  源库直连不需要开关；本地加速要 `Some(true)`；联邦要**至少两个**有值且可挂的连接。
+  源库直连不需要开关；本地加速要 `Some(true)`；联邦要**至少一个**有值且可挂的连接
+  （2026-11-26 起单源放开；全挂不上才拦，并逐条点名 —— 见 `editor_channels::federated_availability`）。
 
 ## 8. 挂载 / 卸载 / 列举的入口映射
 
