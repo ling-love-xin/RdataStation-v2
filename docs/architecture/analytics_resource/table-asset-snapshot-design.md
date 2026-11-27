@@ -399,15 +399,15 @@ manifest_id = sha256(canonical({
 
 | 设计决策 | 计划落点 | 状态 |
 | --- | --- | --- |
-| 快照 / manifest / 版本 / 租约表 | `crates/store/migrations/project_meta/038_table_asset_snapshots.sql`、`crates/store/migrations/global/041_table_asset_snapshots.sql`（schema 重置，不做数据迁移） | 未实现 |
-| 表快照 manifest 与指纹 | `crates/analytics_resource/src/table_asset/manifest.rs`（新模块） | 未实现 |
-| 表版本 / 租约 store | `crates/analytics_resource/src/store/table_asset.rs`（新模块） | 未实现 |
-| 归档 / checkout / 再归档 / 恢复 | `crates/analytics_resource/src/service/table_asset.rs`（新模块） | 未实现 |
+| 快照 / manifest / 版本 / 租约表 | `crates/store/migrations/project_meta/038_table_asset_snapshots.sql`、`crates/store/migrations/global/041_table_asset_snapshots.sql`（schema 重置，不做数据迁移） | 已实现 |
+| 表快照 manifest 与指纹 | `crates/analytics_resource/src/table_asset/manifest.rs`（新模块） | 已实现 |
+| 表版本 / 租约 store | `crates/analytics_resource/src/store/table_asset.rs`（新模块） | 已实现 |
+| 归档 / checkout / 再归档 / 恢复 | `crates/analytics_resource/src/service/table_asset.rs`（新模块） | 已实现 |
 | 归档 schema 只读守卫 | `crates/engine` 的 SQL 闸门 + `rds_archive` 过滤 | 未实现 |
 | 全局发布 / fork / 分发 / 引用 | `global/promote.rs`、`global/refs.rs`、`global/distribute.rs` | 未实现 |
 | 保留与 GC | `global/sql.rs`、新的 `jobs/table_gc.rs` | 未实现 |
-| 删除旧表资产语义 | `table_asset.rs`（旧 `register` / `table_fingerprint`）、`global/promote.rs` 旧表链、`analytics_global_refs` 旧 name 列 | 未实现 |
-| `存为表` 与归档拆分 | `crates/workbench/src/services/persist_jobs.rs`、数据对象面板入口 | 未实现 |
-| 版本对比（schema / 行） | `jobs/version.rs` + `dialogs/version_diff.rs` 扩展 | 未实现 |
+| 删除旧表资产语义 | `table_asset.rs`（旧 `register` / `table_fingerprint`）、`global/promote.rs` 旧表链、`analytics_global_refs` 旧 name 列 | 项目侧已删除；全局侧未实现 |
+| `存为表` 与归档拆分 | `crates/workbench/src/services/persist_jobs.rs`、数据对象面板入口 | 已实现 |
+| 版本对比（schema / 行） | `jobs/version.rs` + `dialogs/version_diff.rs` 扩展 | 版本历史已接快照；对比未实现 |
 
 > 本文是设计定稿，上表全部为待落码项。落地时直接替换旧表资产路径，**不建立旧数据迁移、不保留双读双写或 feature flag**；每刀完成后同步 `README.md` 与 `file-asset-cas-implementation-plan.md` 的边界说明。
