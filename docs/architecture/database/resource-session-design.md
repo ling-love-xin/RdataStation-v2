@@ -260,8 +260,9 @@ mock 落库 ──► mock_generator::persist_table_at ──► MockEngine::wri
   - `data/sample.duckdb`（DuckDB，**2.0.1 写**，实测打开并查到 `orders` 12 行）
   - `.RSmeta/analytics.duckdb`（项目分析库，2.0.1 迁移生成，实测可打开）
   - `welcome.sql`
-- 导航树自带两条示例连接：`G_conn_sample_sqlite` / `G_conn_sample_duckdb`，
-  `use_duckdb_fed = false`（可直连、**未**本地加速——加速由源段那颗两态按钮决定）。
+- 导航树自带两条示例连接：`G_conn_sample_sqlite` / `G_conn_sample_duckdb`，都在项目登记里
+  （`analysis_sources` 两行，别名 `sqlite` / `duckdb`）。连接上已无 `use_duckdb_fed` 字段
+  （2026-11-27 删除）：能不能当源看驱动能力，要不要当源看这份登记。
 - 真机 `MySQL / PG`（192.168.3.138）在全局连接里；driver 已改成内核实现
   `mysql_native` / `postgres_native`（原先写的是 sidecar 插件 id `mysql`/`postgres`，
   插件未装时在导航树里表现为「驱动缺失」）。

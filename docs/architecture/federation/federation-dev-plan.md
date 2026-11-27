@@ -8,6 +8,10 @@
 > `federation-architecture.md`（为什么这样设计，§8 已知问题为权威）。
 > **Oracle / SQL Server 的真机验收**：Oracle **已完成**（`oracle_probe.rs` 台账 + `oracle_federation.rs` 联邦路径）；
 > SQL Server 等用户通知（驱动 / 端点）。
+>
+> **口径变更（2026-11-27）**：本文件里的「开 `use_duckdb_fed` 才算源」已废止——该字段已删，
+> 现行判据 = 驱动能力（`AccelKind`）+ 项目登记（`analysis_sources`）。
+> 权威见 `catalog-context-model.md` §11 / §12；下文历史条目按当时口径保留。
 
 ---
 

@@ -76,7 +76,7 @@
 | 临时表生命周期 | `crates/engine/src/duckdb/{analysis.rs, temp_table.rs}`（✅） |
 | 通道档位（编辑器侧） | `crates/editor/src/channel.rs`（✅） |
 | 选型实测探针 | `crates/engine/tests/duckdb_extensions_probe.rs`（✅） |
-| 数据对象面板（DuckDB 视角全览，规格见 `federation-entry-design.md` §12） | `workbench/src/panels/data_objects_tab.rs` + `workbench/src/components/data_objects/`（✅ 2026-11-18：四形态分组（源/持久表/文件/临时表）、源行展开表/视图叶子、**加速档不占源段**（只在连接行写「已挂载」，`use_duckdb_fed` 有值即出行）、加源文件线+连接线；未加载草稿与 tmp_i_/tmp_m_/tmp_p_ 均不进清单） |
+| 数据对象面板（DuckDB 视角全览，规格见 `federation-entry-design.md` §12） | `workbench/src/panels/data_objects_tab.rs` + `workbench/src/components/data_objects/`（✅ 2026-11-18：四形态分组（源/持久表/文件/临时表）、源行展开表/视图叶子、**加速档不占源段**（只在连接行写「已挂载」；2026-11-27 起判据 = 驱动能力 + 项目登记，连接开关已删）、加源文件线+连接线；未加载草稿与 tmp_i_/tmp_m_/tmp_p_ 均不进清单） |
 
 ## 4. 改这个模块前必须遵守
 

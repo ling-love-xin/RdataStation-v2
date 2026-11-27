@@ -217,8 +217,10 @@ K0a 是唯一前置，且行为零变化，可先合。
 
 ## 11. 未定项（不写进实现，等拍）
 
-1. 「驱动具备直连能力」与「登记」是否继续耦合在一个开关里？建议拆开：能力是常量，
-   登记是显式动作。
+1. ~~「驱动具备直连能力」与「登记」是否继续耦合在一个开关里？~~ **已定并落地（2026-11-27）**：
+   拆开——能力是 `AccelKind` 常量（代码），启用是项目登记（`analysis_sources`，意图清单）；
+   连接上的 `use_duckdb_fed` 字段与对话框开关整体删除，不留兼容层
+   （K4a 登记快照带档位 / K4b 通道门控改成「能力 + 登记」/ K4c 删字段本体）。
 2. 源只读是否**强制**：现阶段全部 `READ_ONLY`；将来若允许写源，要单独设计（事务边界、
    失败回滚、锁）。
 3. Oracle / SQL Server 的驱动形态（ODBC 还是原生扩展）；`READ_ONLY` + 类型映射要另行实测。
@@ -236,3 +238,11 @@ K0a 是唯一前置，且行为零变化，可先合。
   用 `clear_project()` 模拟进程退出、`publish_project` 重建，断言登记行 / 主源 / 表清单三处回位。
   探针的挂载动作是**代理**（真实产品由文档组装 plan 触发；文件库实际走 `file_view`），
   验的是"事实面可由意图清单重建"这一条，不是 GUI 行为。
+- 2026-11-27：K4a 登记快照带档位（`ALIASES_BY_CONN: (alias, AnalysisMountKind)`，
+  新增 `mount_kind_for_connection` / `AnalysisMountKind::label`）。
+- 2026-11-27：K4b 通道门控拆开——`accelerated_availability` 走「能力 → 登记档 → 扩展状态」，
+  `federated_availability` 改「登记过任意档 ∪ 本文档连接」；`editor_exec` 运行态循环同判据。
+- 2026-11-27：K4c 删 `use_duckdb_fed` 字段本体（模型 / 四个 store 面 / 迁移建表 /
+  连接对话框开关与 `set_use_duckdb_fed` / 面板 `fed_enabled` / 草稿箱 / 相关断言）。
+  **其他文档里出现的 `use_duckdb_fed` 一律按历史记录读**，现行口径以本节与
+  `analysis-sources-spec.md` §7.1 为准。

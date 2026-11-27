@@ -153,12 +153,12 @@
     创建时间 / 更新时间，未全部进 `connection_base_rows`；迁卡时需逐项核对——有的并入
     连接串 / 网络分节，有的（联邦开关、时间戳）需补 provider 行或确认不再展示。展示形态
     据此定为**走属性面板**，不在 NavView 行内另建键值卡。
-  - **2026-11-26 字段级核证**：属性 counts 由 `property_panel.rs:287` 从
+  - **2026-11-26 字段级核证**（2026-11-27 修订：`ConnectionInfo` 已删 `use_duckdb_fed`）：属性 counts 由 `property_panel.rs:287` 从
     `ConnectionManager::get_connection_info`（`engine/connection_manager.rs:62` 的
-    `ConnectionInfo`）喂入。该结构**已有** `use_duckdb_fed: bool`、`created_at: Instant`、
+    `ConnectionInfo`）喂入。该结构**已有** `created_at: Instant`、
     `description`、`url`、`server_version`；**缺**独立的 `host` / `port` / `database` /
     `schema` / `updated_at`（主机·端口·库名编码在 `url` 里，可解析或补字段；`created_at`
-    是 `Instant` 非展示串，且无 `updated_at`）。即联邦开关可直接补 counts 键；主机/端口/
+    是 `Instant` 非展示串，且无 `updated_at`）。主机/端口/
     库名需从 url 解析或回补 `ConnectionInfo`；Schema、更新时间当前数据层无对应值。
 - 批次 4 再拆三步，按风险从低到高：
   1. **摘除旧面板概览**（已完成 `8c62eb43`）：看板已接管四卡，删除 `EditorPanel`
