@@ -220,7 +220,7 @@
 
 **同一轮跑出的实证（都属「门控从不跑」的后果）**：
 - `rds-database`：`5 targets / 332 passed / 0 failed / 1 ignored`。
-- `rds-workbench`：**整包 `--tests` 原本编译不过**——`tests/zz_fixture_probe.rs:91` 还在给 `ConnectRequest` 写已删除的 `use_duckdb_fed`（K4c 删字段时漏改），`error[E0560]`。刀34 已修（`--no-run` Finished 6m20s）；随后本机该包被并行改动（`crates/analytics_resource/src/service/table_asset.rs` 未闭合分隔符）带成编译失败，与本审计改动无关。
+- `rds-workbench`：本地 `--tests` 编译不过，根因是 `.gitignore` 掉的本地探针 `tests/zz_fixture_probe.rs:91` 仍给 `ConnectRequest` 写已删的 `use_duckdb_fed`（`error[E0560]`）。该文件**不入库**（`.gitignore:51 **/tests/zz_*.rs`），所以 CI 与别人的机器上看不到这条；刀34 改好后 `--no-run` → Finished 6m20s。随后本机该包又因并行改动（`analytics_resource/src/service/table_asset.rs` 未闭合分隔符）编译失败，与本审计无关。
 
 ---
 
@@ -279,7 +279,7 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 
 | 刀33 | 2026-11-27 | `tests/analysis_kernel_probe.rs`：新增 `clean_accel_slate()`——进程级互斥锁 + 逐条 `unmount_conn` 清 `accel:*` 残留；加速档 4 条用例开头持锁 | 该 target 并行（默认线程数）**6 passed / 0 failed**，串行同；engine 全量 `--tests --no-fail-fast -- --test-threads=1` **21 targets / 414 passed / 0 failed** | 完成（P1-9 关闭） |
 
-| 刀34 | 2026-11-27 | `crates/workbench/tests/zz_fixture_probe.rs`：删掉 `ConnectRequest { use_duckdb_fed: Some(false) }` 这一行（K4c 删字段时漏改该测试，`error[E0560]` 使整包 `--tests` 编译失败） | `cargo test -p rds-workbench --tests -j 1 --no-run` → **Finished 6m20s**。随后 `rds-workbench` 因并行改动 `analytics_resource/service/table_asset.rs` 未闭合分隔符而再次编译失败，与本次改动无关 | 完成（编译面） |
+| 刀34 | 2026-11-27 | 本地探针 `crates/workbench/tests/zz_fixture_probe.rs`：删掉 `ConnectRequest { use_duckdb_fed: Some(false) }` 一行（K4c 删字段时没跟着改，`error[E0560]`）。注意该文件被 `.gitignore:51 **/tests/zz_*.rs` 挡住、**不入库**，所以这一改只落在工作区，不产生代码提交 | `cargo test -p rds-workbench --tests -j 1 --no-run` → **Finished 6m20s**。随后该包因并行改动 `analytics_resource/service/table_asset.rs` 未闭合分隔符再次编译失败，与本审计无关 | 完成（本地环境） |
 
 **刀27 备注**
 

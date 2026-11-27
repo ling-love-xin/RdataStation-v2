@@ -33,6 +33,14 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+# `pwsh -File ... -Packages a,b` 传进来的是一个字符串（-File 不做数组绑定），
+# 这里统一按逗号再拆一次，避免 cargo 收到「rds-a,rds-b」这种非法包名。
+$Packages = @(
+    $Packages |
+        ForEach-Object { $_ -split ',' } |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ }
+)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $tmpDir = Join-Path $root '.rds\tmp'
 if (-not (Test-Path $tmpDir)) { New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null }
@@ -129,9 +137,15 @@ $totalFailed = ($results | Measure-Object -Property failed -Sum).Sum
 $totalNoise = ($results | Measure-Object -Property noise -Sum).Sum
 $totalSkipped = ($results | Measure-Object -Property skipped -Sum).Sum
 $totalPassed = ($results | Measure-Object -Property passed -Sum).Sum
+$totalTargets = ($results | Measure-Object -Property targets -Sum).Sum
 $gatesOff = $missing.Count
 Say ''
-if ($totalFailed -gt 0 -and $totalNoise -ge $totalFailed) {
+if ($totalTargets -eq 0) {
+    # 一条 test result 都没解析到 = cargo 根本没跑起来（包名错 / 编译失败）。
+    # 这时 failed=0 是假绿，必须显式判「无法判定」，否则脚本会给出「全绿」的假结论。
+    Say '结论：无法判定——没有任何包跑出 test result（包名错或编译失败），看各包日志'
+    $exitCode = 2
+} elseif ($totalFailed -gt 0 -and $totalNoise -ge $totalFailed) {
     Say "结论：有失败（$totalFailed），但全部命中已知噪音（analysis_kernel_probe 用例间单例污染，P1-9）——先修隔离再据本脚本判产品"
     $exitCode = 1
 } elseif ($totalFailed -gt 0) {
