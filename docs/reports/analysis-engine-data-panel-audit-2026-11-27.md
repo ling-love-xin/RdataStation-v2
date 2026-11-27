@@ -218,6 +218,10 @@
 
 `rds-database` 也有真机用例（`source_ddl_from_real_schema` / `postgres_nav_introspection` / `postgres_cross_database` / `ddl_from_real_schema`），此前的门控清单漏了这一包；脚本已覆盖。
 
+**同一轮跑出的实证（都属「门控从不跑」的后果）**：
+- `rds-database`：`5 targets / 332 passed / 0 failed / 1 ignored`。
+- `rds-workbench`：**整包 `--tests` 原本编译不过**——`tests/zz_fixture_probe.rs:91` 还在给 `ConnectRequest` 写已删除的 `use_duckdb_fed`（K4c 删字段时漏改），`error[E0560]`。刀34 已修（`--no-run` Finished 6m20s）；随后本机该包被并行改动（`crates/analytics_resource/src/service/table_asset.rs` 未闭合分隔符）带成编译失败，与本审计改动无关。
+
 ---
 
 ## 6. 打磨顺序（五刀，均不动架构）
@@ -274,6 +278,8 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 | 刀32 | 2026-11-27 | `federation/session.rs` 测试：`assert!(without_bases.is_empty())` → `assert_eq!(without_bases, "-")`；`dcdf13b9` 把原本正确的 `assert!(!without_bases.is_empty())` 改错，注释写「清空后指纹就是空串」，与 `bases_fingerprint()` 空底座返回 `"-"` 直接矛盾 | 该条 `--exact` 复跑 1 passed；`cargo test -p rds-engine --lib -j 1 -- --test-threads=1` **356 passed / 0 failed** | 完成 |
 
 | 刀33 | 2026-11-27 | `tests/analysis_kernel_probe.rs`：新增 `clean_accel_slate()`——进程级互斥锁 + 逐条 `unmount_conn` 清 `accel:*` 残留；加速档 4 条用例开头持锁 | 该 target 并行（默认线程数）**6 passed / 0 failed**，串行同；engine 全量 `--tests --no-fail-fast -- --test-threads=1` **21 targets / 414 passed / 0 failed** | 完成（P1-9 关闭） |
+
+| 刀34 | 2026-11-27 | `crates/workbench/tests/zz_fixture_probe.rs`：删掉 `ConnectRequest { use_duckdb_fed: Some(false) }` 这一行（K4c 删字段时漏改该测试，`error[E0560]` 使整包 `--tests` 编译失败） | `cargo test -p rds-workbench --tests -j 1 --no-run` → **Finished 6m20s**。随后 `rds-workbench` 因并行改动 `analytics_resource/service/table_asset.rs` 未闭合分隔符而再次编译失败，与本次改动无关 | 完成（编译面） |
 
 **刀27 备注**
 
