@@ -845,6 +845,22 @@ impl ResultGridDelegate {
             .is_some_and(|reference| reference.is_local())
     }
 
+    /// 这一视图行在数组展开树里的层级（真值 `GridRowRenderer` 的 `level`）
+    ///
+    /// 数据行 / 本地行 = **0**；数组子行 = **所属展开条目的 `path` 段数 + 1**
+    /// （`path` 为空 → 顶层子行 → 1；再往下一层 `path=[i]` → 2）。真值用它把行头三角与
+    /// 行号逐级右移 `LEVEL_SPACING`（`GridRowRenderer.java:40-41`、`:73-86`），
+    /// 本仓的缩进量与槽宽（`ResultGridDelegate::row_number_width_for_text`）都吃这个值。
+    pub fn row_level(&self, row_ix: usize) -> usize {
+        let Some(RowRef::ArrayChild { key, .. }) = self.row_ref(row_ix) else {
+            return 0;
+        };
+        self.expanded_arrays
+            .get(key)
+            .map(|expansion| expansion.path.len() + 1)
+            .unwrap_or(0)
+    }
+
     /// 这一视图行是不是被标记删除的底层行（本地行永不标记删除；渲染灰显 + 删除线用）
     pub fn is_deleted_row(&self, row_ix: usize) -> bool {
         let Some(RowRef::Data(data_ix)) = self.row_ref(row_ix) else {

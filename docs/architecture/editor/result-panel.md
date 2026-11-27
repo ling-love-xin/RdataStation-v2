@@ -10578,13 +10578,12 @@ element 是 `Collection` 就返回 `col.toArray()`）。
 3. **非法字面量**：真值侧值本身是 `DBDCollection`（不存在「不是数组」）；本仓值是驱动
    文本，解析失败按普通文本画。
 4. **子行元素对齐**：按列 `Array` → 文本族左对齐，不按元素自身数值类型右对齐。
-5. **深层子行没有缩进、行号槽也不给三角**：真值 `GridRowRenderer:73-86` 按 `LEVEL_SPACING`
-   （= 图标宽）逐级右移行头三角与行号，且每层行头都有展开三角；本仓槽内只画一个三角且只对
-   底层数据行生效（子行的展开靠「单元格内的三角」，真值无这一层），层级只体现在行号文本
-   （`1.1.1`）上。**槽宽本身已能装下带点子行标签**（2026-11-27 起按实测文本宽撑开，
-   见 §20.8.8），剩的差异是「不按 `level` 逐级右移」——那需要槽内按层级重排三角与数字，
-   与「一个三角」的现状冲突，暂不做。（原记的「二级展开未做」已在 2026-11-27 补齐，
-   见 §9.70.3。）
+5. **深层子行：缩进已对齐，行号槽三角仍不给**：真值 `GridRowRenderer:73-86` 按 `LEVEL_SPACING`
+   （= 图标宽 16）逐级右移行号，且每层行头都有展开三角。本仓**逐级缩进已对齐**
+   （2026-11-27，`row_level` + `level * 16`，槽宽同步撑开，见 §20.8.8 / §20.8.9）；
+   剩下的差异是「子行行号槽没有自己的三角」——子行的展开入口是「单元格内的三角」
+   （真值无这一层），让行号槽再长一个三角需要按层套判定盒，属另一刀。
+   （原记的「二级展开未做」已在 2026-11-27 补齐，见 §9.70.3。）
 
 #### 9.70.6 验证
 
@@ -10626,7 +10625,8 @@ element 是 `Collection` 就返回 `col.toArray()`）。
 
 - 常量（`ui.rs`）：`RESULT_ROW_HEAD_MARGIN_X = 4`（行头内距是 4，与单元格/列头的 6 不同）、
   `RESULT_ROW_EXPANDER_SIZE = 16`、`RESULT_ROW_EXPANDER_SPACING = 2`。行号槽宽 48 是**下限**：
-  `4 + 16 + 2 + 数字 + 4`，数字装不下时按实测文本宽撑开（2026-11-27 起，见 §20.8.8）。
+  `4 + 16 + 2 + 数字 + 4`，数字装不下时按实测文本宽撑开（2026-11-27 起，见 §20.8.8）；
+  子行行号按 `level * 16` 逐级右移、槽宽同步加同一项（见 §20.8.9）。
 - 纯判定（`grid/array_cell.rs::row_expander_glyph(expandable, expanded)`）：无可展开列 →
   `None`；`expanded >= expandable` → `▼`；否则 `▶`（含部分展开）。2 条单测。
 - delegate 三件套：
@@ -11053,7 +11053,7 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 | --- | --- |
 | **行号槽宽：按实测宽「只增不减」**（2026-11-27 已做，原「固定 48」判定作废） | 真值 `GridRowRenderer.computeHeaderWidth:114-128`（4+4 边界 + 16+2 三角 + `stringExtent(text)` + level*LEVEL_SPACING）+ `LightGrid.java:1884-1897`（DEFAULT 30 / **MIN 40** / MAX 400，**只在变大时改**）。本仓实现见 §20.8.8：量视口内行号文本真实宽（`text_system().shape_line`，同字体同 0.75rem 字号）→ `26 + 文本宽` clamp 到 **下限 48 / 上限 400**，变宽才写回并 notify；`clear()` 复位。**常量 48 仍是下限**（不缩）：1–2 位行号真值约 40–47，本仓保持 48 差 ≤8px，属有意差异（见下格） |
 | **行号槽三角字形** | 真值 `expand.svg` / `collapse.svg`（16×16、`#808080`）；本仓 `U+25B6` / `U+25BC` 文字字形 + `muted_foreground`（§9.71 已核，色与真值灰同档）。**形状同为实心三角**，差异只剩「字形 vs 矢量」与字号（12px 字形在 16px 盒内居中） |
-| **深层子行不缩进、子行行号槽无三角** | 真值按 `LEVEL_SPACING` 逐级右移行头三角与行号、每层行头都有三角（`GridRowRenderer:73-86`），本仓槽内只有一个三角且只对底层数据行生效。层级只体现在行号文本（`1.1.1`），子行展开入口是单元格内三角（真值无这一层）。槽宽**按实测文本宽**撑开（§20.8.8，只含文本宽、不含 `level*LEVEL_SPACING`），所以「带点子行标签」能装下，但多层不会逐级右移。见 §9.70.5 第 5 条 |
+| **子行行号槽不给三角（缩进已做）** | 真值 `GridRowRenderer:73-86` 每层行头都有三角，本仓只有一个「整行展开」三角且只给数据行；子行的展开入口是单元格内三角（真值无这一层）。**逐级缩进已对齐**（2026-11-27，`level * 16`，见 §20.8.9），槽宽同步按 `level` 撑开。层级文本 `1.1.1` 与 `row_level` 同源。见 §9.70.5 第 5 条 |
 | 单元格内三角（真值无） | 有意保留（截图形态 `▼ [3]` 需要格内方向指示） |
 | 列头其余 7 组菜单 | 本仓无列级能力，不摆空壳（§9.72.3） |
 | 「复制列名」浮层 / 输入框 / 固定提示 | 用户已定（§9.73.3） |
@@ -11247,6 +11247,47 @@ headless 无法断言；本条依据是源码（`window.rs:1154-1167` 的解析�
 **验证**：`cargo test -p rds-result-panel --lib` = **513 passed / 0 failed**
 （512 + 新增 `row_number_gutter_grows_for_longer_labels_and_never_shrinks`）；
 `cargo test -p rds-ui-guard` = **4 passed**（`ui.rs` 裸 px 基线 30 → 31，理由写在该行注释）。
+
+#### 20.8.9 已交付 · 数组子行行号逐级缩进（2026-11-27）
+
+**真值**（`GridRowRenderer.java`，同一个 `paint` 里三段拼出层级感）：
+
+| 环节 | 真值 | 出处 |
+| --- | --- | --- |
+| 缩进 | `int x = LEFT_MARGIN; if (level > 0) x += level * LEVEL_SPACING;`（`LEVEL_SPACING = EXPANDED_BOUNDS.width = 16`） | `:73-76`、`:41` |
+| 三角 | `state != NONE` → 在 `x` 处画 16×16 三角，`x += 16 + EXPANDER_SPACING(2)` | `:77-80` |
+| 留位 | `else if (isElementExpandable(element) && level == 0)` → 也 `x += 16 + 2`（**只有 level 0 留位**） | `:81-83` |
+| 槽宽 | `computeHeaderWidth` 里 `width += level * LEVEL_SPACING`（与 `:116-118` 的三角位**两份都算**，真值自身不一致，本仓同此） | `:114-128` |
+| 命中 | `isOverExpander(x, level)` 的判定盒也从 `LEFT_MARGIN + level * LEVEL_SPACING` 起 | `:131-135` |
+
+所以真值里「父行数字 x = 4 + 16 + 2 = 22、子行（level 1、自身未展开）x = 4 + 16 = 20」——
+层级靠**缩进 + 三角有无**共同表达，不是单纯右移 16px 拉开距离。
+
+**本仓实现**：
+
+| 位置 | 内容 |
+| --- | --- |
+| `grid/view_rows.rs` | 新增 `row_level(row_ix) -> usize`：数据行 / 本地行 0；数组子行 = 所属展开条目 `path.len() + 1`（顶层 1、钻一层 2…） |
+| `grid/cell.rs` | 行号槽的数字 div 在 `level > 0` 时 `.ml(RESULT_ROW_EXPANDER_SIZE * level)`；新增 `editor-result-rowno-text-{row_ix}` 哨兵供用例量文字起点 |
+| `grid/delegate.rs` | `row_number_width_for_text(text_width, level)` 纯函数加 `level * LEVEL_SPACING` 项；`required_row_number_width` 逐行按自己的 `level` 折算再取最大 |
+| `grid/tests.rs` | 新增 `nested_child_rows_indent_the_row_number_by_level`：钉 `row_level`（0/1/纯文本子行不可再钻）+ 渲染实测「父行文字偏移 22px、子行 20px」；`row_number_gutter_grows_…` 补 `level=2 → 26+14+32=72` 一档 |
+
+**有意差异**：
+
+- **子行行号槽不给三角**：真值每层行头都有三角（`state != NONE` 或 `level == 0` 留位），
+  本仓子行的展开入口在单元格内三角（`grid/cell.rs` 的格内 `▼`），行号槽只有一个「整行展开」三角
+  且只给数据行。因此子行只吃到缩进、吃不到三角位——文字偏移 20 而不是 22。
+- **`isOverExpander` 判定盒没跟着缩进**：本仓槽内三角只存在于 level 0（它的判定盒就是 `[4, 20]`），
+  没有 level > 0 的三角可点，所以这条真值公式在渲染层没有对应分支（登记在此，避免被当遗漏）。
+- **头像是行图标（`IMAGE_SPACING`）未做**：真值 `GridRowRenderer:85-90` 会在行头画行图标，本仓行号槽无图标
+  （结果集没有「行图标」来源，§9.70.5 第 5 条同档）。
+
+**未目视**：多层子行（`1.1.1`）展开后行号槽被撑到 72px 左右（26 + 文本 + 2×16）时的观感——
+按用户约束不启动 GUI / 不截图，待用户自行查看；若觉得槽过于宽，收法是「缩进不进槽宽、
+只右移文字」（会裁尾）或「缩进用 8px」——两者都偏离真值，需用户拍板。
+
+**验证**：`cargo test -p rds-result-panel --lib` = **514 passed / 0 failed**；
+`cargo test -p rds-ui-guard` = **4 passed**。
 
 ## 21. 遗留汇总
 

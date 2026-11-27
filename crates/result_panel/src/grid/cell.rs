@@ -300,6 +300,8 @@ pub(crate) fn render_td(
             _ => None,
         };
         let expander_glyph = data_row.and_then(|data_row| delegate.row_expander_glyph(data_row));
+        // 数组展开树的层级（数据行 = 0，顶层子行 = 1……）：行号数字逐级右移（见下方 `.ml`）
+        let level = delegate.row_level(row_ix);
         // 行级展开会插 / 摘子行 → 行数变了，与单元格三角同一条通知路径
         let toggle_row_expand = {
             let table = cx.entity().clone();
@@ -376,9 +378,19 @@ pub(crate) fn render_td(
                     .when(expander_glyph.is_some(), |this| {
                         this.ml(crate::ui::RESULT_ROW_EXPANDER_SPACING)
                     })
+                    // 【逐级缩进 2026-11-27】真值行头按 `level * LEVEL_SPACING` 右移行号
+                    // （`GridRowRenderer.java:40-41`、`:73-86`；`LEVEL_SPACING` = 图标宽 16）。
+                    // 本仓子行的展开入口在单元格内（行号槽不给子行三角），所以缩进直接加在
+                    // 数字前面：第 1 层 +16、第 2 层 +32……槽宽同步在
+                    // `ResultGridDelegate::row_number_width_for_text` 里加同一项。
+                    .when(level > 0, |this| {
+                        this.ml(crate::ui::RESULT_ROW_EXPANDER_SIZE * level as f32)
+                    })
                     .flex_1()
                     .min_w_0()
                     .truncate()
+                    // 用例量「这一行的行号文本落在哪个 x」（缩进回归哨兵）
+                    .debug_selector(move || format!("editor-result-rowno-text-{row_ix}"))
                     .child(SharedString::from(text)),
             )
             .into_any_element();

@@ -420,25 +420,27 @@ impl ResultGridDelegate {
             .max(crate::ui::RESULT_ROW_NUMBER_WIDTH)
     }
 
-    /// 由「行号文本实测宽」算槽宽（纯函数，clamp 到常量下限 / 真值上限 400）
+    /// 由「行号文本实测宽 + 层级缩进」算槽宽（纯函数，clamp 到常量下限 / 真值上限 400）
     ///
     /// 构成照抄真值 `GridRowRenderer.computeHeaderWidth:114-128`：
-    /// `LEFT_MARGIN + RIGHT_MARGIN + (EXPANDED_BOUNDS.width + EXPANDER_SPACING) + 文本宽`。
-    /// 三角盒这里**恒算**：本仓槽里的三角是条件渲染（只有顶层数组行才有），但槽宽不能
+    /// `LEFT_MARGIN + RIGHT_MARGIN + (EXPANDED_BOUNDS.width + EXPANDER_SPACING) + 文本宽
+    /// + level*LEVEL_SPACING`（`LEVEL_SPACING = EXPANDED_BOUNDS.width = 16`，`:40-41`）。
+    /// 三角盒这里**恒算**：本仓槽里的三角是条件渲染（只有可展开的数据行才有），但槽宽不能
     /// 随行抖动；真值对不可展开行不加那 18px，差值落在下限兜底里，不改变结果。
     ///
     /// 抽成纯函数是为了能被用例直接钉（headless 的 `NoopTextSystem`
     /// 让真实测宽恒为 0，见 `platform/test/platform.rs:2/139`）。
-    pub(crate) fn row_number_width_for_text(text_width: Pixels) -> Pixels {
+    pub(crate) fn row_number_width_for_text(text_width: Pixels, level: usize) -> Pixels {
         let chrome = crate::ui::RESULT_ROW_HEAD_MARGIN_X * 2.
             + crate::ui::RESULT_ROW_EXPANDER_SIZE
             + crate::ui::RESULT_ROW_EXPANDER_SPACING;
-        (chrome + text_width)
+        let indent = crate::ui::RESULT_ROW_EXPANDER_SIZE * level as f32;
+        (chrome + text_width + indent)
             .max(crate::ui::RESULT_ROW_NUMBER_WIDTH)
             .min(crate::ui::RESULT_ROW_NUMBER_MAX_WIDTH)
     }
 
-    /// 量可见行的行号文本，取最宽的，折算成槽宽
+    /// 量可见行的行号文本，取最宽的，折算成槽宽（每行按自己的 `level` 计缩进）
     ///
     /// 文本宽走 `window.text_system().shape_line`，与渲染同字体同字号
     /// （`text_xs` = 0.75 rem，见 [`crate::ui::RESULT_ROW_LABEL_FONT_SCALE`]）——不是
@@ -472,11 +474,16 @@ impl ResultGridDelegate {
                 .text_system()
                 .shape_line(label.into(), font_size, std::slice::from_ref(&run), None)
                 .width();
-            if width > widest {
-                widest = width;
+            let needed = Self::row_number_width_for_text(width, self.row_level(row_ix));
+            if needed > widest {
+                widest = needed;
             }
         }
-        Self::row_number_width_for_text(widest)
+        if widest > Pixels::ZERO {
+            widest
+        } else {
+            crate::ui::RESULT_ROW_NUMBER_WIDTH
+        }
     }
 
     /// 记下「这一屏需要多宽」，只在变宽时写回；返回是否真的改了

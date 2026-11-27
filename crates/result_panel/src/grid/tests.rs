@@ -4558,31 +4558,38 @@ fn row_number_gutter_grows_for_longer_labels_and_never_shrinks(
 
     // —— 1. 折算：下限 48（26px chrome = 左右内距 8 + 三角 16 + 间距 2）
     assert_eq!(
-        ResultGridDelegate::row_number_width_for_text(px(0.)),
+        ResultGridDelegate::row_number_width_for_text(px(0.), 0),
         crate::ui::RESULT_ROW_NUMBER_WIDTH,
         "空文本不该把行号槽压到 48 以下"
     );
     // 1–2 位（"8" ≈ 6px、"88" ≈ 12px）、3 位（"200" ≈ 18px）都装得下，不缩也不撑
     assert_eq!(
-        ResultGridDelegate::row_number_width_for_text(px(18.)),
+        ResultGridDelegate::row_number_width_for_text(px(18.), 0),
         crate::ui::RESULT_ROW_NUMBER_WIDTH,
         "3 位行号（26 + 18 = 44）仍在 48 以内，不该把行号列撑宽"
     );
     // 4 位（"1000" ≈ 24px）26 + 24 = 50 > 48 → 撑宽（旧固定 48 会裁掉两侧 1–2px）
     assert_eq!(
-        ResultGridDelegate::row_number_width_for_text(px(24.)),
+        ResultGridDelegate::row_number_width_for_text(px(24.), 0),
         px(50.),
         "4 位数没把行号槽撑到 26 + 文本宽"
     );
     // 数组子行标签（"1.1.1.1" ≈ 34px）同理：26 + 34 = 60
     assert_eq!(
-        ResultGridDelegate::row_number_width_for_text(px(34.)),
+        ResultGridDelegate::row_number_width_for_text(px(34.), 0),
         px(60.),
         "带点的子行行号没把行号槽撑开"
     );
+    // 【逐级缩进】真值 `computeHeaderWidth:127` 的 `level * LEVEL_SPACING`（16/级）：
+    // 层级 2 的子行（`1.1.1`）比同文本的顶层行宽 32px
+    assert_eq!(
+        ResultGridDelegate::row_number_width_for_text(px(14.), 2),
+        px(72.),
+        "level*LEVEL_SPACING 没进槽宽公式（26 + 14 + 32）"
+    );
     // 上限：真值 MAX_ROW_HEADER_WIDTH = 400
     assert_eq!(
-        ResultGridDelegate::row_number_width_for_text(px(500.)),
+        ResultGridDelegate::row_number_width_for_text(px(500.), 0),
         crate::ui::RESULT_ROW_NUMBER_MAX_WIDTH,
         "超长行号没夹到真值上限 400"
     );
@@ -4644,7 +4651,65 @@ fn row_number_gutter_grows_for_longer_labels_and_never_shrinks(
     );
 }
 
-/// 【行号槽右键 2026-11-21】右键行号格必须把它自己记成菜单目标（`context_cell`）。
+/// 【逐级缩进 2026-11-27】真值行头按 `level * LEVEL_SPACING` 右移行号
+/// （`GridRowRenderer.java:73-76`：`x = LEFT_MARGIN; if (level > 0) x += level * LEVEL_SPACING`；
+/// `LEVEL_SPACING = EXPANDED_BOUNDS.width = 16`，`:41`）。
+///
+/// 本仓两件一起钉：
+/// 1. `row_level`：数据行 0、顶层子行 1、钻一层 2（与 `expanded_arrays` 的 `path.len()+1` 同口径）；
+/// 2. 渲染：父行文字在 `4 + 16 + 2`（三角盒 16 + 间距 2），子行文字在 `4 + 16`（无三角、缩进 16）
+///    —— 与真值 paint 的 `:73-83` 一致（`else if (expandable && level == 0)` 才给不可展开的行留三角位）。
+#[gpui_kit::test]
+fn nested_child_rows_indent_the_row_number_by_level(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::px;
+
+    cx.update(gpui_kit::init);
+
+    // 纯逻辑：层级口径
+    let mut delegate = array_grid();
+    assert_eq!(delegate.row_level(0), 0, "数据行层级 0");
+    assert!(delegate.toggle_array_expand(0, 1, &[]), "3 项数组应能展开");
+    assert_eq!(delegate.row_level(1), 1, "顶层子行层级 1");
+    assert!(
+        !delegate.toggle_array_expand(0, 1, &[0]),
+        "纯文本子行（`vip`）不是数组，不该能再钻一层"
+    );
+
+    // 渲染：父行（有三角）vs 子行（无三角 + 缩进 16）的文字起点
+    let (_, vcx) = cx.add_window_view(|window, cx| HeaderHarness {
+        state: cx.new(|cx| gpui_kit::component::table::TableState::new(delegate, window, cx)),
+    });
+    for _ in 0..2 {
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+    let parent_cell = vcx
+        .debug_bounds("editor-result-rowno-0")
+        .expect("父行行号格应有几何");
+    let parent_text = vcx
+        .debug_bounds("editor-result-rowno-text-0")
+        .expect("父行行号文本应有几何");
+    let child_cell = vcx
+        .debug_bounds("editor-result-rowno-1")
+        .expect("子行行号格应有几何");
+    let child_text = vcx
+        .debug_bounds("editor-result-rowno-text-1")
+        .expect("子行行号文本应有几何");
+
+    // 父行：pl 4 + 三角盒 16 + 间距 2 = 22
+    let parent_offset = parent_text.left() - parent_cell.left();
+    assert!(
+        parent_offset >= px(21.) && parent_offset <= px(23.),
+        "父行行号文字没落在 4 + 16 + 2：{parent_offset:?}"
+    );
+    // 子行：pl 4 + level 1 × 16 = 20（无三角，所以不比父行更靠右）
+    let child_offset = child_text.left() - child_cell.left();
+    assert!(
+        child_offset >= px(19.) && child_offset <= px(21.),
+        "子行行号文字没落在 4 + level×16 = 20：{child_offset:?}"
+    );
+}
 ///
 /// 组件的右键派发只认 delegate 上**最近一次**落点（`grid/menu.rs::context_menu` 读
 /// `delegate.context_cell`），行号列若不挂自己的 `on_mouse_down(Right)`，右键行号槽
