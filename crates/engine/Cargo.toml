@@ -44,7 +44,6 @@ tokio-native-tls.workspace = true
 russh.workspace = true
 tokio-socks.workspace = true
 base64.workspace = true
-x509-parser.workspace = true
 
 # ===== 序列化 =====
 serde.workspace = true
@@ -61,7 +60,6 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 
 # ===== 工具库 =====
-dashmap.workspace = true
 once_cell.workspace = true
 lru.workspace = true
 rand.workspace = true

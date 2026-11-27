@@ -13,7 +13,6 @@ russh.workspace = true
 native-tls.workspace = true
 tokio-native-tls.workspace = true
 tokio-socks.workspace = true
-x509-parser.workspace = true
 
 # ===== Async 运行时 =====
 tokio.workspace = true
