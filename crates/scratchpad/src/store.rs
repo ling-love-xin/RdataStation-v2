@@ -2707,6 +2707,36 @@ mod tests {
             .expect("create scratchpad_tags");
     }
 
+    /// 书签管理面扫描（2026-11-25）：读**文件旁 sidecar**（file-meta 约定，与编辑器
+    /// 同一数据源）；按（路径, 行号）升序，含便签 label；无书签的文件不产生行。
+    #[tokio::test]
+    async fn scan_bookmarks_reads_file_sidecars() {
+        let project = temp_project("bookmarks");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+
+        // a.sql 打两个书签（含便签）；sub/b.md 无书签；同名 sidecar 文件（点前缀）
+        // 不进树、也不该出现在扫描里。
+        let a = store.scratchpad_dir.join("a.sql");
+        std::fs::write(&a, "select 1
+select 2
+").unwrap();
+        file_meta::add_bookmark(&a, 1, "开头").unwrap();
+        file_meta::add_bookmark(&a, 2, "第二段").unwrap();
+        let sub = store.scratchpad_dir.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("b.md"), "note").unwrap();
+
+        let rows = store.scan_bookmarks().await.unwrap();
+        assert_eq!(rows.len(), 2, "只有 a.sql 的两个书签");
+        assert_eq!(rows[0].relative_path, "a.sql");
+        assert_eq!(rows[0].name, "a.sql");
+        assert_eq!(rows[0].line, 1, "按行号升序");
+        assert_eq!(rows[0].label, "开头");
+        assert_eq!(rows[1].line, 2);
+        assert_eq!(rows[1].label, "第二段");
+    }
+
     #[tokio::test]
     async fn tag_attach_detach_and_read_back() {
         let project = temp_project("tags");
