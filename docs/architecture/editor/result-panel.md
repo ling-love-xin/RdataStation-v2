@@ -11020,7 +11020,7 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 | **排序图标**（16px 三态 vs 组件 12px 双 chevron） | 组件槽整条关掉 + 自绘真值 SVG | `Column` 无图标字段、`TableState` 无对应 builder（`table/column.rs:10-52`），但 `Column::sort = None` 会让 `render_sort_icon` 早退（`table/state.rs:2087-2101`）；三张真值 SVG 用 `Icon::data()` 吃原始字节内嵌（`crates/result_panel/assets/`），**不动资产管线**。落点见 §9.72.3 第 4 条 |
 | **三角槽宽**（28 vs 19） | 原生 `Size::Size(px(19.))` | icon-only 按钮在该档宽高直取该值（`button/button.rs:693-700`），内部 `Caret` 恒 16px（`select.rs:60-69`）→ 19 = 16 + 左右各 1.5。见 §9.72.3 第 1 条 |
 
-**原生排查的三条硬结论**（后续再遇到「要不要 patch vendor」先看这里）：
+**原生排查的四条硬结论**（后续再遇到「要不要 patch vendor」先看这里）：
 
 1. `render_th` 的排序图标是 delegate 内容**之后**的独立 slot（`table/state.rs:2137-2178` 的
    `h_flex().justify_between()` + `.children(render_sort_icon(..))`），delegate 无法替换它
@@ -11029,6 +11029,13 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
    所以撤掉 `Column::sort` 不改变列头点击语义；排序入口由自绘图标与两条列头菜单承担。
 3. `Icon::data(&[u8])` 可以直接渲染任意 SVG 字节（`icon.rs:167-170`），**不需要注册 AssetSource**
    —— 这条让「真值图形原样落地」不再需要改 `crates/app/src/assets.rs`。
+4. **光标样式解析是「后注册优先」，不是「最深优先」**：`Window::cursor_style`
+   （gpui-pre 0.3.12 `window.rs:1154-1167`）从 `cursor_styles` **反向**遍历，
+   遇到 `hitbox_id: None`（全局样式）直接 `Done(该样式)` 覆盖一切；带 hitbox 的请求只在
+   那个 hitbox 悬停时生效。子元素后绘制、后注册 → 子元素的 cursor 样式压住祖先。
+   推论：**给外层 div 加 `.cursor_pointer()` 覆盖不了内部组件 root 的 `cursor_default`**
+   （`vendor button/button.rs:677-687` 给按钮 root 写死 default，只有 link / text 变体
+   `cursor_pointer`）。元素自己是最深元素时（无子元素设过 cursor），自己写的样式生效。
 
 **顺带修掉的口径错**（列宽自适应）：`ui::RESULT_FIT_HEADER_CHROME` 原为 20px，只算了组件
 排序槽 16 + 右偏移 4，漏掉三角菜单槽 19、两处 3px 间距与表头自身 12px 左右内距
@@ -11126,6 +11133,48 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 **验证**：`cargo test -p rds-result-panel --lib` = **512 passed / 0 failed**；
 `cargo test -p rds-ui-guard` = **4 passed**（`ui.rs` 裸 px 基线 29 → 30，理由写在该行注释）。
 `ui_guard` 同时拦下一下新增裸 px（`grid/table_impl.rs` 注释里的写法），已改成文字表述。
+
+#### 20.8.7 列头 / 行头的光标语义（2026-11-27 复核，本条只做「本仓可做」的部分）
+
+真值按悬停区域换系统光标（`LightGrid.java:2010-2147`，光标源 `:449`
+`sortCursor = getSystemCursor(SWT.CURSOR_HAND)`）：
+
+| 悬停区域 | 真值光标 | 出处 |
+| --- | --- | --- |
+| 排序箭头（`isOverSortArrow`） | HAND | `:2040-2044` → `:2081-2088` |
+| 列图标（`isOverIcon`，label provider 的列图） | HAND | `:2052-2055` → `:2090` |
+| 筛选按钮（`isOverFilterButton`，即 `drop_down` 三角） | HAND | `:2046-2050` → `:2094-2096` |
+| 列分隔线（±`COLUMN_RESIZER_THRESHOLD`） | `CURSOR_SIZEWE` | `:2058-2063` → `:2107-2116` |
+| 行头展开三角（`isOverExpander`） | HAND | `:2141-2142` |
+| 表头 / 行头其余区域 | 默认箭头（`setCursor(null)`） | `:2111-2113`、`:2143-2145` |
+
+本仓对照（**标 ✅ 的是 2026-11-27 复核后确认已对齐，⚪ 的是本轮新补**）：
+
+| 区域 | 本仓 | 依据 |
+| --- | --- | --- |
+| ✅ 列分隔线 | 组件 `resize_handle_band` 已 `.cursor_col_resize()` | `vendor table/state.rs:1949-1958` |
+| ✅ 行号槽展开三角 | 行号含量槽的三角区 `.cursor_pointer()` | `grid/cell.rs` 行号槽段 |
+| ⚪ 排序箭头 | 自绘排序图标 div 补 `.cursor_pointer()` | `grid/header.rs::render_th` 的 `sort_control` |
+| ⚪ 三角槽（列头菜单入口） | **补不了**：见下方卡点 | — |
+| 其余区域 | 默认箭头（未设 cursor 样式） | 与真值一致 |
+
+**三角槽卡点的源码依据**（不是「没试过」，是「试了会无效」）：光标解析是**后注册优先**
+（`Window::cursor_style`，gpui-pre 0.3.12 `window.rs:1154-1167`，反向遍历 `cursor_styles`），
+而 `DropdownButton` 的 root 写死 `.cursor_default()`
+（`vendor button/button.rs:677-687`，只有 link / text 变体才 `cursor_pointer`）；子元素
+后注册 → 外层包 `.cursor_pointer()` 会被它压掉。要真对齐只能**不用 `DropdownButton`**
+（自绘三角 + 自己起 popover 菜单），那是列头菜单整条重建，单列一项待办。
+本仓另有一处「真值有、本仓不做」对应的差异：真值的列图标 / 筛选按钮是**可点入口**
+（`UIIcon.DROP_DOWN` 恒显 + 漏斗指示），本仓的漏斗只作「此列已筛选」指示、点击入口是三角
+菜单，所以那两个 HAND 区域在本仓没有对应控件。
+
+**未目视**：HAND 与默认箭头在真实鼠标移动下的切换时机（真值是「进入区域即换、离开即恢复」，
+本仓由 GPUI 的 hitbox 悬停驱动，语义等价但换的时机没有真机对照）。
+
+**为什么不写用例钉**：`Window::cursor_style` 与测试平台的 `cursor_style()`
+（`platform/test/platform.rs:130`）都是 `pub(crate)`，crate 外读不到当前光标样式，
+headless 无法断言；本条依据是源码（`window.rs:1154-1167` 的解析顺序 +
+`button.rs:677-687` 的 root 写死 default），不是运行观测。
 
 ## 21. 遗留汇总
 

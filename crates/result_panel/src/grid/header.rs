@@ -224,6 +224,13 @@ pub(crate) fn render_th(
                 .id(("editor-result-col-sort", col_ix))
                 .debug_selector(move || format!("editor-result-sort-icon-{col_ix}"))
                 .flex_none()
+                // 【光标】真值把排序箭头当可点控件：`LightGrid.java:449`
+                // `sortCursor = getSystemCursor(SWT.CURSOR_HAND)`，`:2081-2088` 鼠标进到
+                // `isOverSortArrow` 区域就 `setCursor(sortCursor)`，移出恢复默认箭头。
+                // 这里不用 `Button` 换手形：`Button` 的 root 是 `cursor_default`
+                // （`vendor button/button.rs:677-687`，只有 link / text 变体才
+                // `cursor_pointer`），且按钮会带自己的 padding / 焦点线，16px 槽会被撑开。
+                .cursor_pointer()
                 // 截住冒泡：组件列头 `on_click` 会选整列，点排序图标不该顺带选列
                 // （真值这两个事件也是分开的：`Event_ChangeSort` vs 列头按下）
                 .on_click(cx.listener(move |table, _, _, cx| {
