@@ -1,10 +1,73 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修** · Phase C 进度：打开✅ / 连接预选✅（C-2 前半）/ 执行回写✅（C-2 后半）/ 脏点✅（C-3）/ **冲突 Diff✅（C-4）** / **拖放✅（拖入编辑器插入 + 系统文件拖入导入）** / **命中跳行✅** · Phase D：**草稿箱侧入口已接**（右键「归档为存档…」2026-11-06；归档/取回/版本本体在 `analytics_resource` 侧建成，**copy 语义**——2026-10-13 裁决，非原设计的 move）· 元数据已迁 per-file sidecar（2026-10-29）· 待续：K1c（元数据级操作保持同步，**有意保留**）
+> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修** · Phase C 进度：打开✅ / 连接预选✅（C-2 前半）/ 执行回写✅（C-2 后半）/ 脏点✅（C-3）/ **冲突 Diff✅（C-4）** / **拖放✅（拖入编辑器插入 + 系统文件拖入导入）** / **命中跳行✅** · Phase D：**草稿箱侧入口已接**（右键「归档为存档…」2026-11-06；归档/取回/版本本体在 `analytics_resource` 侧建成，**copy 语义**——2026-10-13 裁决，非原设计的 move）· 元数据已迁 per-file sidecar（2026-10-29）· **书签管理面已进草稿箱**（2026-11-25，含便签；分区改 VSCode 资源管理器式；未命名 SQL 另存为默认落草稿箱）· 待续：K1c（元数据级操作保持同步，**有意保留**）
 > 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
 > 复用 `connection-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
+
+### 2026-11-28（三十二次）— 完成度审计 + 剪贴板粘贴闭环 + 导入改应用内弹窗
+
+用户提问「草稿箱完成度如何」，并拍板两件事：**把审计发现的问题写进文件**、**导入改用应用内**。
+本轮先做实证审计（不改代码），再落地 P1/P2 两条，其余入台账（`scratchpad-backlog.md`）。
+
+**审计结论**：面板自身约 90%，跨模块闭环约 60%。分维度与证据见 backlog §1；缺口分四级：
+P1 剪贴板断链、P2 导入形态不一致 + 替换无预览、P3 三项待拍板（引用跨根 / Tab 边界 / 冲突模态）、
+P4 工程债（三个巨型文件 + 工具栏宽度缺复现口径 + 文档滞后）。
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | **剪贴板粘贴闭环（P1）**：新增 `ScratchpadPaste` 动作（`ctrl-v`，context `scratchpad`）+ 树行右键「粘贴」（剪贴板为空时不出现，避免"点了没反应"的入口）；落点判据抽成纯函数 `scratchpad_paste_target_of`——文件夹 → 自身、文件 → **同级父目录**、根级 → 模块根；剪切搬运成功后**清空剪贴板**（不能粘第二次）；内联编辑态早退，不抢输入框的 `ctrl-v`。`paste_scratchpad_clipboard` 与 `ScratchpadClipboard` 的 `#[allow(dead_code)]` 一并移除 | `commands.rs`、`workbench/src/commands.rs`、`app/src/main.rs`、`chrome.rs`（`on_action`）、`rows.rs`（菜单）、`actions.rs`、`scratchpad_view.rs`、`primitives.rs` |
+| 2 | **新建落点与粘贴落点分口径**：`new_target` 继续用**绝对**路径（树内插行位置按 `entry.path` 比对、展开集按绝对键存），粘贴 target 用 `relative_path_of` 转**相对**（`jobs::Paste.target` 口径）。新增 `scratchpad_selected_dir()` 专供新建，避免一个函数两种路径语义 | `actions.rs` |
+| 3 | **导入改应用内弹窗（P2-1，用户拍板）**：`pick_scratchpad_imports` 方法名不变（工具栏「⬇」与空态「导入」两个调用点零改动），内部改为打开应用内 `Dialog`：路径输入（换行/分号分隔）+「加入」+「浏览…」（系统选择器**只回填清单**）+ 待导入清单（每行 ✕ 按路径文本移除）+ 确认时过滤不存在路径并提示跳过条数。与「添加外部引用」同形态 | `scratchpad_view.rs`（状态）、`actions.rs`（open/browse/add/remove/confirm/close）、`chrome.rs`（`render_import_dialog` + 挂载） |
+| 4 | **文档**：新增 `scratchpad-backlog.md`（完成度表 / 缺口台账 / 修复明细 / 更优设计方案 / 手动验收清单）；architecture 加 §13.5（K13/K14）；README 测试数与能力表同步 | `docs/architecture/scratchpad/` |
+
+**未做（如实标注）**：批量替换的 Diff 预览（要两阶段 job 契约：先算计划零写盘 → 确认 → 校验指纹后写，
+见 backlog §7 建议 3）；引用目录跨根展开、多文件 Tab 边界、巨型文件拆分。**未拍板**：粘贴落点里
+「选中文件 → 父目录」这一条是我按 VSCode 同级语义定的，用户只拍了导入形态；若不认可，只改
+`scratchpad_paste_target_of` 的文件分支即可退回「粘到模块根」。
+
+**验证**：`cargo test -p rds-scratchpad -j 2` → **56 passed**（+1
+`paste_target_puts_files_beside_them_and_folders_inside_them`）；`cargo build -p rds-app -j 2`
+→ Finished。**未做真机点击验收**（用户禁用虚拟桌面截图通道）：验收步骤见 backlog §8，需一次真点击。
+
+### 批次 B1–B4 补记（提交 `ea270f37`，当时未入册）
+
+补记只为让进度记录与代码对齐，细节以提交为准：
+
+| 批次 | 内容 |
+| --- | --- |
+| B1 | 手搓控件迁标准组件（`rounded_full()` 归零；`cursor_pointer()` 只保留折叠头与树行的允许例外） |
+| B2 | 工具栏迁 `Toolbar` + 空态迁 `Empty` |
+| B3 | 技术债：`order` 与 `group_max_h` 持久化接通；39 处 `shell::result_style` → `workbench_shell` |
+| B4 | 草稿箱接入全局标签系统（`entry_tags` / `project_tags` / 打标弹窗 / 标签筛选） |
+
+**验证**（当时）：`cargo build -p rds-app` 通过；scratchpad 55 项 / settings 33 项测试通过。
+
+### 2026-11-25（三十一次）— 分区 VSCode 化 + 书签管理面（含便签）+ 未命名文档落草稿箱
+
+用户三条补充拍板后的落地批：草稿/书签/引用/回收站四分区改 **VSCode 资源管理器式**；
+跨文件**书签管理面**进草稿箱（书签 + 便签）；导航栏打开的未命名 SQL **另存为默认
+落草稿箱**。
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | **分区布局 VSCode 化**：各分区独立展开收起；展开内容 `flex_1`——多区展开**均分**、唯一展开**占满**、收起塌成头行沉底（高度链照抄草稿分区：容器 flex_1 → Collapsible h_full → 内容 flex_1 + 自滚）。**随删**：拖拽把手 + `group_max_h` 全链（状态 / settings model `scratchpad.group_max_h` / registry `ScratchpadGroupMaxH` 槽 / 读写服务）——高度改由 flex 分配，限高把手失去意义 | `chrome.rs`（主装配 + refs/trash 分区）、`scratchpad_view.rs`、`settings/{model,registry,service}`、`actions.rs` |
+| 2 | **书签管理面**（第四分区「书签」，顺序 = 草稿 → 书签 → 引用 → 回收站）：数据 = 草稿目录各文件**文件旁 sidecar**（file-meta 约定，与编辑器同一数据源）——含**便签 label**；展开惰性入队扫描（`jobs::LoadBookmarks` 后台任务，K1b 判据；空结果不重扫；watcher 外部改动时重扫）；行点击 = 打开草稿并跳到书签行（复用 `ScratchpadHost::open_search_hit`，span=None 只落光标）；badge = 书签总数 | `models.rs`（`ScratchpadBookmarkRow`）、`store.rs::scan_bookmarks`、`jobs.rs`、`chrome.rs`、`actions.rs` |
+| 3 | **未命名文档另存为默认草稿箱**：导航「在 SQL 编辑器中打开」建的是内存 untitled 文档（无路径，此前另存为对话框目录由系统决定，存哪跟草稿箱无关）。端口加**默认目录提供者**（`editor_files::attach` 签名扩展，编辑器不知道"该存哪"）；workbench 注入 `当前项目草稿箱根`（目录存在才设；无项目回落系统默认）。保存落 `scratchpad/` 后 watcher ~1.2 s 自动上树——"导航打开的文件在草稿箱看不到"由此闭环（不保存关闭仍有 E3 会话兜底） | `editor/ports/editor_files.rs`、`workbench/view/lifecycle.rs`（A9 注入处） |
+
+**边界口径（同批钉死）**：书签归属三层——单文件操作在编辑器（`Ctrl+Shift+B` / `F8`），
+跨文件管理在草稿箱，归档侧只读引用查看（带版本信息，归档搬 sidecar 属标签差距清单
+的③批次，未做）；scratchpad 的**连接元信息** sidecar（`.RSmeta` 集中）与**书签**
+sidecar（文件旁）是两个分层——通用文件元数据 vs 模块私有元数据，路径不合并。
+
+**验证**：`cargo check -p rds-scratchpad -p rds-editor -p rds-workbench --all-targets -j 2`
+零 error；`cargo test -p rds-scratchpad -j 2 --lib` → **53 passed**（+1
+`scan_bookmarks_reads_file_sidecars`）；`cargo test -p rds-workbench --test
+scratchpad_editor_entry` → 1 passed。**未跑**：`rds-editor --lib` / `rds-workbench --lib`
+——rustc 在 test target 链接段反复 `STATUS_STACK_BUFFER_OVERRUN`（并行会话共用 target
+抢资源，RUST_MIN_STACK=256MB 已在 `.cargo/config.toml`；本轮 editor 改动为纯签名
+扩展且无测试引用该签名）。待环境空闲补跑。
 
 ### 2026-11-24（三十次）— 用户目视四项修复 + 文档对账（Phase D / sidecar 口径）
 
@@ -693,7 +756,7 @@ Phase D 表格标注实际落地状态（见下）；两份 README 的能力表 
 ## 6. 验证方式
 
 - 每阶段：`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2` 零告警 + 对应测试（`crypto` 之外的单测均在 `store.rs` 内联模块）
-- 后端单测基线：`cargo test -p rds-scratchpad -j 2 --lib`（**37 项**；含临时项目目录的端到端文件操作 + 面板纯函数 + 后台任务）
+- 后端单测基线：`cargo test -p rds-scratchpad -j 2 --lib`（**56 项**，2026-11-28 实测；含临时项目目录的端到端文件操作 + 面板纯函数 + 后台任务 + 窗口级回归）
 - UI：`cargo run -p rds-app` 手动走通 §3 场景清单与 `scratchpad-user-guide.md` §9 验收清单
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）
 - 阶段完成后回填本文件「进度记录」、`crates/scratchpad/README.md` 能力表与原型文档同步

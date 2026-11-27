@@ -57,7 +57,7 @@ use gpui_kit::*;
 
 use crate::commands::{
     ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile, ScratchpadOpen,
-    ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
+    ScratchpadPaste, ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
 };
 
 use crate::{
@@ -314,6 +314,12 @@ pub struct ScratchpadViewState {
     ref_dialog_open: bool,
     ref_path_input: Option<Entity<InputState>>,
     ref_alias_input: Option<Entity<InputState>>,
+    /// 导入弹窗（2026-11-28 用户拍板「改用应用内的」）：与「添加外部引用」同形态的
+    /// 应用内 Dialog；系统文件选择器只作弹窗里的「浏览…」填表辅助。
+    /// `import_paths` = 待导入的绝对路径（浏览回填 + 手动输入加入的合集）。
+    import_dialog_open: bool,
+    import_paths: Vec<String>,
+    import_path_input: Option<Entity<InputState>>,
     /// 草稿树的滚动句柄（虚拟列表内部滚动；键盘导航可滚到选中项）。
     list_scroll: ScratchpadListScroll,
     /// 是否正有 OS 文件拖入面板上方（`on_drag_move::<ExternalPaths>` 置位，drop / exit 复位）。
@@ -457,6 +463,9 @@ impl Default for ScratchpadViewState {
             ref_dialog_open: false,
             ref_path_input: None,
             ref_alias_input: None,
+            import_dialog_open: false,
+            import_paths: Vec::new(),
+            import_path_input: None,
             list_scroll: ScratchpadListScroll::default(),
             external_drag_over: false,
             external_drag_count: 0,
@@ -594,6 +603,22 @@ pub(super) fn archive_targets(key: &str, selected: &std::collections::HashSet<St
     } else {
         vec![key.to_string()]
     }
+}
+
+/// 粘贴落点（纯函数，`relative` = 模块内相对路径）：
+/// 文件夹 → 自身（粘进目录里）；文件 → 父目录（VSCode 同级语义）；
+/// 根级文件 → 空串（= 模块根，`jobs::Paste.target` 的约定）。
+///
+/// 抽成纯函数是为了让事件路径与单元测试共用同一套判据（视图状态只负责取
+/// 「唯一选中项 + 它是文件还是文件夹」）。
+pub(super) fn scratchpad_paste_target_of(relative: &str, is_folder: bool) -> String {
+    if is_folder {
+        return relative.to_string();
+    }
+    relative
+        .rsplit_once('/')
+        .map(|(parent, _)| parent.to_string())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -74,7 +74,7 @@
 
 | 已实现 | 待补 |
 | --- | --- |
-| 模块根 + 内部态隔离 + 旧布局迁移 + **系统文件拖入树导入**（OS 文件拖放：拖入提示条 + 过滤文件夹 + 复用导入任务） | — |
+| 模块根 + 内部态隔离 + 旧布局迁移 + **系统文件拖入树导入**（OS 文件拖放：拖入提示条 + 过滤文件夹 + 复用导入任务）+ **应用内导入弹窗**（2026-11-28：路径输入 +「加入」+「浏览…」回填 + 清单去重；与「添加外部引用」同形态） | — |
 | 项目级回收站（来源/原路径/还原/清空，均按来源过滤） | — |
 | 列表/新建（含模板）/重命名/删除/移动/复制（文件与**文件夹递归**） | — |
 | 打开草稿到编辑器 + 按 `file_meta` 预选连接 + **执行后回写**最近连接 | — |
@@ -84,8 +84,9 @@
 | 内容搜索（正则/大小写）+ **命中高亮**（含 Unicode 宽度变化字符的正确回射）+ **全部替换**（结果与替换栏落中央编辑区）+ **点命中标题打开该草稿并跳行** | — |
 | 外部引用（添加文件或目录 / 自定义别名 / 改名 / 打开 / 移除 / 可用性探测 / **失效后重新引用**）、文件元数据（数据源绑定：读 `file_meta` + 写 `bind_connections` / `update_file_meta`） | 引用目录的展开浏览（当前只作入口；K6 待拍板） |
 | **文件监控**（`notify` 递归监听模块根 + 1.2 s 去抖重拉；启动失败降级为手动 `↻`）+ **外部改动后自动重搜**已打开的搜索结果 | — |
-| 面板侧：多选（Ctrl/Shift/Ctrl+A）、剪切/复制/粘贴、撤销栏（5s 自动消失）、右键菜单、F2/Del/Esc/↑↓/Enter/Ctrl+N、导入、打开所在位置、**脏点**（编辑器未保存修改）、只读模式禁写 | Phase D 回收站与资源删除的合并展示 |
-| 工具栏自定义（⋯ 更多设置四栏：图标功能 / 眼睛可见 / 左右切换 / `grip` 拖拽排序，`order` 持久化）+ 引用/回收站**分区拖拽调高**（分隔把手，2-18rem） | — |
+| **书签管理面**（2026-11-25 用户拍板：跨文件书签归草稿箱）：第四分区（草稿→书签→引用→回收站，VSCode 资源管理器式——多区展开均分 / 唯一展开占满 / 收起塌成头行沉底）；行 = 文件 · 行号 · **便签**（`Bookmark.label`，与编辑器悬停备注同一数据源）；点击跳行（复用搜索命中端口）；扫描走 jobs 后台（空结果不重扫、外部改动重扫） | 归档侧只读引用查看（归档搬 sidecar，差距清单③批次）；树行书签角标（可选增强） |
+| 面板侧：多选（Ctrl/Shift/Ctrl+A）、剪切/复制/**粘贴**（`Ctrl+V` + 右键「粘贴」，落点：文件夹 → 目录内、文件 → 同级父目录、无选中/多选 → 模块根；剪切成功后剪贴板即清空，不做二次粘贴）、撤销栏（5s 自动消失）、右键菜单、F2/Del/Esc/↑↓/Enter/Ctrl+N、导入、打开所在位置、**脏点**（编辑器未保存修改）、只读模式禁写 | Phase D 回收站与资源删除的合并展示 |
+| 工具栏自定义（⋯ 更多设置四栏：图标功能 / 眼睛可见 / 左右切换 / `grip` 拖拽排序，`order` 持久化） | —（分区拖拽调高已随 VSCode 式分区移除：高度改由 flex 分配） |
 
 > 连接绑定的**回写**发生在宿主：`crates/workbench/src/services/scratchpad_meta.rs`（编辑器回执 → 只回写模块内草稿，见 `docs/architecture/scratchpad/scratchpad-architecture.md` §6.13）。
 
@@ -93,5 +94,5 @@
 
 - 设计（权威）：`docs/architecture/scratchpad/` 五件套——`README.md`（模块入口）· `scratchpad-architecture.md`（设计理念与架构 + 已知问题）· `scratchpad-prototype-design.md` + `scratchpad-prototype.html`（原型）· `scratchpad-dev-plan.md`（进度）· `scratchpad-user-guide.md`（使用手册）。
 - 对外宣传 / 新人先读：`docs/architecture/scratchpad/scratchpad-showcase.html`（视觉版：吸顶导航 + 关键数字 + 卡片排版）· `scratchpad-showcase.md`（可贴版：纯文本 + 流程图，适合 PR / wiki）。
-- 验证：`cargo check -p rds-scratchpad -j 2`；单测 `cargo test -p rds-scratchpad -j 2 --lib`（**52 项**：域逻辑 + 面板纯函数 + 后台任务 + 窗口级回归）。
+- 验证：`cargo check -p rds-scratchpad -j 2`；单测 `cargo test -p rds-scratchpad -j 2 --lib`（**53 项**：域逻辑 + 面板纯函数 + 后台任务 + 窗口级回归 + 书签扫描）。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

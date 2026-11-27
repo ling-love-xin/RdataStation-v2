@@ -587,3 +587,16 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | K10 | ~~面板层缺自动化测试~~ ✅ **已补（2026-10-09）** | 见 §11 |
 | K11 | ~~`ScratchpadState` 无生产调用方~~ ✅ **已清理（2026-10-09）** | 按"无使用方即删"：`crates/scratchpad/src/state.rs` 删除；store 由 workbench 按窗口的 `Shared::project` 按需构造，watcher 由面板实体自持生命周期，进程级状态壳无存在必要 |
 | K12 | ~~占位视图仍在~~ ✅ **已核实（2026-10-09）** | 「资源」面板**已随 M6 接通**（`workbench/src/panels/resources.rs` + `analytics_resource::resource_view::ResourcesPanel` 实体），非占位；「插件」面板占位保留（M9 未立项，`render_plugin_placeholder` 是明确的「下一轮接入」占位） |
+
+### 13.5 2026-11-28 审计与收口（本轮）
+
+完整台账（完成度分维度表 / P1–P4 缺口 / 更优设计方案 / 手动验收清单）见
+[`scratchpad-backlog.md`](./scratchpad-backlog.md)。本节只登记结论与两条已闭环项。
+
+| # | 问题 | 处理 |
+| --- | --- | --- |
+| K13 | **剪贴板只做了一半**：剪切 / 复制能把条目放进内存剪贴板，但没有任何 UI / 快捷键能触发粘贴（`paste_scratchpad_clipboard` 曾带 `#[allow(dead_code)]` 且零调用方） | **✅ 已修（2026-11-28）**：新增 `ScratchpadPaste`（`app/main.rs` 绑 `ctrl-v`，context `scratchpad`）+ 树行右键「粘贴」（剪贴板为空时该项不出现）；落点判据抽为纯函数 `scratchpad_paste_target_of`（文件夹 → 自身；文件 → 父目录；根级 → 模块根）；剪切搬运成功后清空剪贴板；内联编辑态早退，不抢输入框的文本粘贴。`#[allow(dead_code)]` 同步移除 |
+| K14 | **两个弹窗形态不一致**：导入走系统原生 `prompt_for_paths`，引用走应用内 `Dialog`（用户「弹出窗口没实现」体感的来源） | **✅ 已修（2026-11-28，用户拍板改应用内）**：导入改为应用内 `Dialog`（路径输入 +「加入」+「浏览…」回填 + 清单去重 + ✕ 移除），与「添加外部引用」同形态；系统文件选择器退为弹窗里的填表辅助，不再直接弹 |
+
+仍开放（不在本轮范围）：批量替换的 Diff 预览（需两阶段 job 契约）、引用目录跨根展开（K6）、
+多文件 Tab 边界（K7）、巨型文件拆分（`chrome.rs` 2668 行 / `store.rs` 2525 行 / `actions.rs` 2095 行，2026-11-28 实测）。

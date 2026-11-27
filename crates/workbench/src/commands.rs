@@ -40,7 +40,7 @@ pub use database::commands::{
 // 草稿箱（M5）局部动作：定义在 `scratchpad::commands`（随草稿箱视图归位），此处重导。
 pub use scratchpad::commands::{
     ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile, ScratchpadOpen,
-    ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
+    ScratchpadPaste, ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
 };
 
 // Mock 生成（M7）局部动作：定义在 `mock::commands`（随 Mock 视图归位），此处重导。

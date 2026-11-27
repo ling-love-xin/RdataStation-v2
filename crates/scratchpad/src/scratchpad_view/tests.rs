@@ -12,8 +12,9 @@ use super::{
     ScratchpadEntry, ScratchpadEntryKind, ScratchpadSearchMode, ScratchpadSearchView,
     ScratchpadSort, ScratchpadTemplate, ToolbarButtonCfg, ToolbarButtonKey, archive_targets,
     flatten_scratchpad, join_scratchpad_rel, scratchpad_apply_template_ext,
-    scratchpad_entry_matches, scratchpad_shows_dirty_dot, scratchpad_size_label,
-    scratchpad_sort_entries, scratchpad_split_name, search_view_from_payload,
+    scratchpad_entry_matches, scratchpad_paste_target_of, scratchpad_shows_dirty_dot,
+    scratchpad_size_label, scratchpad_sort_entries, scratchpad_split_name,
+    search_view_from_payload,
 };
 use crate::jobs::SearchPayload;
 use crate::scratchpad_view::scratchpad_jobs;
@@ -65,6 +66,24 @@ fn archive_targets_takes_the_whole_selection_only_when_clicked_row_is_selected()
     assert_eq!(
         archive_targets("/p/a.sql", &single),
         vec!["/p/a.sql".to_string()]
+    );
+}
+
+/// 粘贴落点（2026-11-28 接线时定的语义）：文件夹 → 自身；文件 → 父目录；
+/// 根级文件 → 模块根（空串）。这三个分支决定「粘到哪」，不能靠 UI 手点验证。
+#[test]
+fn paste_target_puts_files_beside_them_and_folders_inside_them() {
+    assert_eq!(scratchpad_paste_target_of("notes", true), "notes");
+    assert_eq!(scratchpad_paste_target_of("notes/deep", true), "notes/deep");
+    assert_eq!(scratchpad_paste_target_of("notes/a.sql", false), "notes");
+    assert_eq!(
+        scratchpad_paste_target_of("notes/deep/b.sql", false),
+        "notes/deep"
+    );
+    assert_eq!(
+        scratchpad_paste_target_of("root.sql", false),
+        "",
+        "根级文件没有父目录 → 落到模块根（jobs::Paste 用空串表示）"
     );
 }
 

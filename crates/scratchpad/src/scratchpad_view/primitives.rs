@@ -101,11 +101,12 @@ pub(super) enum ScratchpadClipboardMode {
     Copy,
 }
 
-/// 文件剪贴板（路径相对模块根）。
-/// 注：剪切/复制已接线（`set_scratchpad_clipboard`），粘贴入口（`paste_scratchpad_clipboard`）
-/// 尚未接 UI → `mode` / `paths` 暂只写不读，按预留保留。
+/// 文件剪贴板（`paths` 为**绝对**路径，与树行 `entry.path` 同源；粘贴时由
+/// `paste_scratchpad_clipboard` 用 `relative_path_of` 一次性换算成模块内相对路径再入队）。
+///
+/// 2026-11-28：粘贴入口已接线（`ctrl-v` / 树行右键「粘贴」→ `paste_scratchpad_clipboard`），
+/// `mode` / `paths` 均为读写字段，`dead_code` 标记一并移除。
 #[derive(Clone)]
-#[allow(dead_code)]
 pub(super) struct ScratchpadClipboard {
     pub(super) mode: ScratchpadClipboardMode,
     pub(super) paths: Vec<String>,

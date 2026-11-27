@@ -16,6 +16,8 @@ actions!(
         ScratchpadUp,
         ScratchpadDown,
         ScratchpadOpen,
-        ScratchpadNewFile
+        ScratchpadNewFile,
+        // 粘贴（2026-11-28）：与右键「剪切 / 复制」成对补齐剪贴板闭环。
+        ScratchpadPaste
     ]
 );

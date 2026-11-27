@@ -36,8 +36,8 @@ use workbench::commands::{
     NavCommitStaged, NavDeleteToStaged, NavDown, NavEnd, NavExpand, NavHome, NavOpenProperties,
     NavPageDown, NavPageUp, NavRename, NavReorderDown, NavReorderUp, NavRevertAllStaged, NavUp,
     QuickOpenLocate, SaveConnection, ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown,
-    ScratchpadNewFile, ScratchpadOpen, ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
-    SwitchProject, TestConnection, ToggleQuickGoto, ToggleQuickOpen,
+    ScratchpadNewFile, ScratchpadOpen, ScratchpadPaste, ScratchpadRename, ScratchpadSelectAll,
+    ScratchpadUp, SwitchProject, TestConnection, ToggleQuickGoto, ToggleQuickOpen,
 };
 use workbench::WorkbenchView;
 
@@ -607,7 +607,7 @@ fn run_app() {
                 KeyBinding::new("delete", NavDeleteToStaged, Some("database-nav")),
                 KeyBinding::new("ctrl-z", NavRevertAllStaged, Some("database-nav")),
                 KeyBinding::new("ctrl-s", NavCommitStaged, Some("database-nav")),
-                // M5 草稿箱：全选 / 重命名 / 删除 / 取消编辑 / 树内导航（仅当焦点在草稿箱面板内时生效）。
+                // M5 草稿箱：全选 / 重命名 / 删除 / 取消编辑 / 树内导航 / 粘贴（仅当焦点在草稿箱面板内时生效）。
                 KeyBinding::new("ctrl-a", ScratchpadSelectAll, Some("scratchpad")),
                 KeyBinding::new("f2", ScratchpadRename, Some("scratchpad")),
                 KeyBinding::new("delete", ScratchpadDelete, Some("scratchpad")),
@@ -616,6 +616,10 @@ fn run_app() {
                 KeyBinding::new("down", ScratchpadDown, Some("scratchpad")),
                 KeyBinding::new("enter", ScratchpadOpen, Some("scratchpad")),
                 KeyBinding::new("ctrl-n", ScratchpadNewFile, Some("scratchpad")),
+                // 粘贴剪贴板里的草稿（剪切 → 移动，复制 → 递归复制）。内联重命名输入
+                // 有自己的 `ctrl-v`（文本粘贴），Input 在更深层先消费按键；处理器另做
+                // 「编辑态早退」兜底，不会把文本粘贴误当草稿粘贴。
+                KeyBinding::new("ctrl-v", ScratchpadPaste, Some("scratchpad")),
                 // M6 资产库（仅当焦点在资产库面板内时生效）：`Ctrl+F` 聚焦搜索 /
                 // `Esc` 清搜索词 / `Delete` 移入回收站。`Ctrl+F` 与 workbench 的
                 // 「聚焦数据源导航搜索」、设置页的同名键均不冲突——各自绑在更深的
@@ -638,7 +642,7 @@ fn run_app() {
                 // 归档入口：落到面板头 `＋▾` 的第二项「从本地文件归档…」（处理器里写明
                 // "动作没有选菜单这一步，落到本地文件那条"）。草稿挑选那条没有键，草稿箱
                 // （`scratchpad` context）也**没有**同名键——它只绑了
-                // `ctrl-a` / `f2` / `delete` / `escape` / `up` / `down` / `enter` / `ctrl-n`。
+                // `ctrl-a` / `f2` / `delete` / `escape` / `up` / `down` / `enter` / `ctrl-n` / `ctrl-v`。
                 KeyBinding::new("ctrl-shift-a", RequestArchive, Some("analytics-resource")),
                 // M1 项目管理：切换项目（回选择器）/ 关闭项目。
                 KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench")),

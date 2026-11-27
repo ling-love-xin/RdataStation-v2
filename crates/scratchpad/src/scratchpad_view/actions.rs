@@ -828,6 +828,10 @@ impl ScratchpadView {
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("外部文件或目录路径")));
         let ref_alias_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("别名（默认取名称）")));
+        // 导入弹窗（2026-11-28）：路径输入（多个路径分行或分号分隔）。
+        let import_path_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(tr("文件或目录路径（多个用换行 / 分号分隔）"))
+        });
         let mut view = self.scratchpad.borrow_mut();
         view.name_input = Some(name_input);
         view._name_sub = Some(name_sub);
@@ -841,6 +845,7 @@ impl ScratchpadView {
         view._search_replace_sub = Some(replace_sub);
         view.ref_path_input = Some(ref_path_input);
         view.ref_alias_input = Some(ref_alias_input);
+        view.import_path_input = Some(import_path_input);
     }
 
     // ===== 标签（统一规格 §7.3：打标弹窗 / 筛选） =====
@@ -1010,8 +1015,10 @@ impl ScratchpadView {
         );
         self.ensure_scratchpad_inputs(window, cx);
         // 新建落点：唯一选中且为文件夹 → 该目录（并展开，使内联行可见）；否则模块根。
+        // `new_target` 是**绝对**路径：树内插行位置按 `entry.path` 比对（chrome 侧），
+        // 展开集也按绝对键存；后台建文件时 `resolve_path` 对绝对路径原样接住。
         if matches!(edit, ScratchpadEdit::NewFile | ScratchpadEdit::NewFolder) {
-            let target = self.scratchpad_paste_target();
+            let target = self.scratchpad_selected_dir().unwrap_or_default();
             let mut view = self.scratchpad.borrow_mut();
             view.new_target = target.clone();
             if !target.is_empty() {
@@ -1279,12 +1286,15 @@ impl ScratchpadView {
         cx.notify();
     }
 
-    /// 粘贴剪贴板到当前选中的文件夹（未选中文件夹则粘到模块根）。
+    /// 粘贴剪贴板到当前选中的落点（文件夹 → 该目录；文件 → 其父目录；无选中 → 模块根）。
     ///
     /// 复制可能搬运大量字节（递归复制），故入队到后台；结果由 `apply_scratchpad_ops` 回填。
-    /// 注：剪切/复制已接线（右键菜单），粘贴入口尚未接 UI（上下文菜单 / 快捷键）→ 按预留保留。
-    #[allow(dead_code)]
+    /// 入口三处：`ctrl-v`（`ScratchpadPaste`）、树行右键「粘贴」、粘贴后清选择（与剪切/复制成对）。
     pub(super) fn paste_scratchpad_clipboard(&mut self, cx: &mut Context<Self>) {
+        // 内联编辑（重命名 / 新建）时 `ctrl-v` 归输入框的文本粘贴，不做草稿粘贴。
+        if self.scratchpad.borrow().edit.is_some() {
+            return;
+        }
         // M1：只读打开时禁止写入草稿。
         if self.host.read_only() {
             self.host.notice(tr("只读模式：不允许粘贴草稿").to_string(), cx);
@@ -1301,31 +1311,75 @@ impl ScratchpadView {
         };
         let target = self.scratchpad_paste_target();
         let cut = clipboard.mode == ScratchpadClipboardMode::Cut;
-        scratchpad_jobs::enqueue_paste(&root, cut, clipboard.paths.clone(), &target);
+        // 剪贴板存绝对路径（与树行 `entry.path` 同源），`jobs::Paste` 的 `paths` 要**相对**：
+        // 在这里一次性换算，不让后台任务依赖「`Path::join` 遇绝对路径会替换前缀」这种隐式行为。
+        let store = ScratchpadStore::new(root.clone());
+        let sources: Vec<String> = clipboard
+            .paths
+            .iter()
+            .filter_map(|p| store.relative_path_of(std::path::Path::new(p)))
+            .collect();
+        if sources.is_empty() {
+            self.host
+                .notice(tr("剪贴板里的草稿已不在模块内，无法粘贴").to_string(), cx);
+            cx.notify();
+            return;
+        }
+        scratchpad_jobs::enqueue_paste(&root, cut, sources, &target);
         {
             let mut view = self.scratchpad.borrow_mut();
             view.selected.clear();
             view.anchor = None;
+            // 剪切是「一次性」的：搬运成功后不能再粘第二次（否则源已不在，报路径不存在）。
+            if cut {
+                view.clipboard = None;
+            }
         }
         self.ensure_scratchpad_pump(cx);
         cx.notify();
     }
 
-    /// 粘贴目标：唯一选中且为文件夹 → 该目录；否则模块根（空串）。
+    /// 粘贴落点（**模块内相对路径**，`jobs::Paste.target` 的口径）：
+    /// 唯一选中为文件夹 → 该目录；唯一选中为文件 → 其父目录（VSCode 同级语义）；
+    /// 其余（无选中 / 多选）→ 模块根（空串）。
     pub(super) fn scratchpad_paste_target(&self) -> String {
+        let Some(root) = self.host.project_root() else {
+            return String::new();
+        };
         let view = self.scratchpad.borrow();
-        if view.selected.len() == 1 {
-            if let Some(path) = view.selected.iter().next() {
-                if view
-                    .kind_of(path)
-                    .map(|k| k == ScratchpadEntryKind::Folder)
-                    .unwrap_or(false)
-                {
-                    return path.clone();
-                }
-            }
+        if view.selected.len() != 1 {
+            return String::new();
         }
-        String::new()
+        let Some(absolute) = view.selected.iter().next() else {
+            return String::new();
+        };
+        let store = ScratchpadStore::new(root);
+        let Some(relative) = store.relative_path_of(std::path::Path::new(absolute)) else {
+            return String::new();
+        };
+        match view.kind_of(absolute) {
+            Some(kind) => crate::scratchpad_view::scratchpad_paste_target_of(
+                &relative,
+                kind == ScratchpadEntryKind::Folder,
+            ),
+            None => String::new(),
+        }
+    }
+
+    /// 新建落点（**绝对路径**，仅供树内「插行位置」与展开态使用）：
+    /// 唯一选中为文件夹 → 该目录；否则 `None`。
+    ///
+    /// 与 [`Self::scratchpad_paste_target`] 分开：一个喂后台任务的相对路径，
+    /// 一个喂 UI 的行定位（`entry.path` 是绝对路径），两套口径不可混用。
+    pub(super) fn scratchpad_selected_dir(&self) -> Option<String> {
+        let view = self.scratchpad.borrow();
+        if view.selected.len() != 1 {
+            return None;
+        }
+        let path = view.selected.iter().next()?;
+        view.kind_of(path)
+            .filter(|k| *k == ScratchpadEntryKind::Folder)
+            .map(|_| path.clone())
     }
 
     /// 从回收站还原指定条目。
@@ -1920,8 +1974,32 @@ impl ScratchpadView {
 }
 
 impl ScratchpadView {
-    /// 打开系统文件对话框并导入所选文件（工具栏「⬇」与空态「导入」共用）。
+    /// 打开「导入外部文件」弹窗（2026-11-28 用户拍板：改用**应用内** Dialog，
+    /// 与「添加外部引用」成套；系统文件选择器退为弹窗里的「浏览…」填表入口，
+    /// 不再直接弹系统框，避免两个入口观感不成一套）。
+    ///
+    /// 入口：工具栏「⬇」与空态「导入」共用（调用点保持 `pick_scratchpad_imports`）。
     pub(super) fn pick_scratchpad_imports(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_scratchpad_inputs(window, cx);
+        if let Some(input) = self.scratchpad.borrow().import_path_input.clone() {
+            input.update(cx, |s, cx| s.set_value(String::new(), window, cx));
+            let handle = input.read(cx).focus_handle(cx);
+            handle.focus(window, cx);
+        }
+        {
+            let mut view = self.scratchpad.borrow_mut();
+            view.import_paths.clear();
+            view.import_dialog_open = true;
+        }
+        cx.notify();
+    }
+
+    /// 弹窗里的「浏览…」：开系统选择器，把选中的路径**回填**进待导入列表（不直接导入）。
+    pub(super) fn browse_scratchpad_imports(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let entity = cx.entity();
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -1933,11 +2011,97 @@ impl ScratchpadView {
             .spawn(cx, async move |cx| {
                 if let Ok(Ok(Some(paths))) = receiver.await {
                     let _ = cx.update(|_window, cx| {
-                        entity.update(cx, |this, cx| this.import_scratchpad_files(paths, cx));
+                        entity.update(cx, |this, cx| {
+                            let mut view = this.scratchpad.borrow_mut();
+                            for path in paths {
+                                let text = path.to_string_lossy().to_string();
+                                if !view.import_paths.iter().any(|e| e.eq_ignore_ascii_case(&text))
+                                {
+                                    view.import_paths.push(text);
+                                }
+                            }
+                            cx.notify();
+                        });
                     });
                 }
             })
             .detach();
+    }
+
+    /// 把输入框里的路径并入待导入列表（换行 / 分号分隔；去重，大小写不敏感）。
+    pub(super) fn add_scratchpad_import_paths(&mut self, cx: &mut Context<Self>) {
+        let raw = self
+            .scratchpad
+            .borrow()
+            .import_path_input
+            .as_ref()
+            .map(|i| i.read(cx).value().to_string())
+            .unwrap_or_default();
+        let mut added = 0usize;
+        {
+            let mut view = self.scratchpad.borrow_mut();
+            for part in raw.split(['\n', ';']) {
+                let part = part.trim().trim_matches('"').trim();
+                if part.is_empty() {
+                    continue;
+                }
+                if !view.import_paths.iter().any(|e| e.eq_ignore_ascii_case(part)) {
+                    view.import_paths.push(part.to_string());
+                    added += 1;
+                }
+            }
+        }
+        if added == 0 && !raw.trim().is_empty() {
+            self.host.notice(tr("这些路径已在列表里").to_string(), cx);
+        }
+        cx.notify();
+    }
+
+    /// 从待导入列表移除一项（按路径文本移除：列表快照渲染，下标会因前一项删除而漂移）。
+    pub(super) fn remove_scratchpad_import_path(&mut self, path: &str, cx: &mut Context<Self>) {
+        {
+            let mut view = self.scratchpad.borrow_mut();
+            if let Some(index) = view.import_paths.iter().position(|p| p == path) {
+                view.import_paths.remove(index);
+            }
+        }
+        cx.notify();
+    }
+
+    /// 确认导入：把输入框里尚未加入的路径一并收下 → 过滤不存在的 → 入队后台复制 → 关闭。
+    ///
+    /// 返回 `true` = 关闭弹窗（Dialog `on_ok` 语义）；一个有效路径都没有时提示并保持打开。
+    pub(super) fn confirm_scratchpad_imports(&mut self, cx: &mut Context<Self>) -> bool {
+        self.add_scratchpad_import_paths(cx);
+        let candidates = self.scratchpad.borrow().import_paths.clone();
+        let mut accepted: Vec<std::path::PathBuf> = Vec::new();
+        let mut missing = 0usize;
+        for text in &candidates {
+            let path = std::path::Path::new(text);
+            if path.exists() {
+                accepted.push(path.to_path_buf());
+            } else {
+                missing += 1;
+            }
+        }
+        if accepted.is_empty() {
+            self.host
+                .notice(tr("请先添加要导入的文件路径").to_string(), cx);
+            return false;
+        }
+        if missing > 0 {
+            self.host
+                .notice(format!("{missing} 个路径不存在，已跳过"), cx);
+        }
+        self.import_scratchpad_files(accepted, cx);
+        self.close_scratchpad_import_dialog(cx);
+        true
+    }
+
+    /// 关闭导入弹窗（取消按钮 / Esc / 右上角 ×）。
+    pub(super) fn close_scratchpad_import_dialog(&mut self, cx: &mut Context<Self>) {
+        self.scratchpad.borrow_mut().import_dialog_open = false;
+        cx.notify();
     }
 
     /// 打开「添加外部引用」弹窗（2026-10-12 原型「弹窗输入路径+别名」对齐）：

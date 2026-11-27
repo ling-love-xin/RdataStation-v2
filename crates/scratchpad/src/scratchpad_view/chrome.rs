@@ -400,6 +400,13 @@ impl ScratchpadView {
                 }),
         );
 
+        // 导入弹窗（2026-11-28 用户拍板「改用应用内的」）：与「添加外部引用」同形态。
+        let import_dialog_el = if self.scratchpad.borrow().import_dialog_open {
+            Some(self.render_import_dialog(window, cx))
+        } else {
+            None
+        };
+
         // 添加外部引用弹窗（2026-10-12 原型「弹窗输入路径+别名」对齐）：打开时渲染 Dialog。
         let ref_dialog_el = if self.scratchpad.borrow().ref_dialog_open {
             Some(self.render_ref_dialog(window, cx))
@@ -548,6 +555,14 @@ impl ScratchpadView {
                     });
                 }
             })
+            // 粘贴（`ctrl-v` / 右键「粘贴」）：落点见 `scratchpad_paste_target`。
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadPaste, _window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.paste_scratchpad_clipboard(cx));
+                }
+            })
+            .when_some(import_dialog_el, |this, el| this.child(el))
             .when_some(ref_dialog_el, |this, el| this.child(el))
             .when_some(tag_dialog_el, |this, el| this.child(el))
             .id("scratchpad-panel")
@@ -2443,7 +2458,144 @@ impl ScratchpadView {
             .into_any_element()
     }
 
-    /// 标签编辑弹窗（统一规格 §7.3）：项目标签勾选列表（勾 = 打标）+ 新建标签输入行。
+    /// 导入外部文件弹窗（2026-11-28 用户拍板：改用**应用内** Dialog，与「添加外部引用」
+    /// 同形态；系统文件选择器退为弹窗里的「浏览…」，把选中路径回填进清单）。
+    ///
+    /// 内容 = 路径输入 +「加入」/「浏览…」+ 待导入清单（每行 ✕ 移除）；
+    /// 确认走 `confirm_scratchpad_imports`（过滤不存在的路径 → 入队复制 → 关窗）。
+    fn render_import_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let entity = cx.entity();
+        let input = self.scratchpad.borrow().import_path_input.clone();
+        let paths = self.scratchpad.borrow().import_paths.clone();
+        let close = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.close_scratchpad_import_dialog(cx));
+            }
+        };
+        let confirm = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| -> bool {
+                entity.update(app, |this, cx| this.confirm_scratchpad_imports(cx))
+            }
+        };
+        Dialog::new(cx)
+            .title(div().child(tr("导入外部文件")))
+            .content({
+                let entity = entity.clone();
+                let input = input.clone();
+                let paths = paths.clone();
+                move |content: DialogContent, _window: &mut Window, cx: &mut App| {
+                    let theme = cx.theme();
+                    let muted = theme.colors.muted_foreground;
+                    let mut body = div().v_flex().w_full().gap_2().px_3().py_1();
+                    // 输入行：路径 +「加入」+「浏览…」
+                    if let Some(input) = &input {
+                        let add_entity = entity.clone();
+                        let add =
+                            move |_: &gpui_kit::ClickEvent,
+                                  _: &mut gpui_kit::Window,
+                                  app: &mut App| {
+                                add_entity
+                                    .update(app, |this, cx| this.add_scratchpad_import_paths(cx));
+                            };
+                        let browse_entity = entity.clone();
+                        let browse = move |_: &gpui_kit::ClickEvent,
+                                           window: &mut gpui_kit::Window,
+                                           app: &mut App| {
+                            browse_entity.update(app, |this, cx| {
+                                this.browse_scratchpad_imports(window, cx)
+                            });
+                        };
+                        body = body.child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .w_full()
+                                .child(div().flex_1().min_w_0().child(Input::new(input).w_full()))
+                                .child(
+                                    Button::new("sp-import-add")
+                                        .small()
+                                        .label(tr("加入"))
+                                        .on_click(add),
+                                )
+                                .child(
+                                    Button::new("sp-import-browse")
+                                        .small()
+                                        .label(tr("浏览…"))
+                                        .on_click(browse),
+                                ),
+                        );
+                    }
+                    // 待导入清单：空态给一句话指路，非空逐行（路径 + ✕）。
+                    if paths.is_empty() {
+                        body = body.child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(tr("尚未添加路径：可粘贴路径后点「加入」，或点「浏览…」选择文件")),
+                        );
+                    } else {
+                        let mut list = div().v_flex().w_full().gap_1();
+                        for path in &paths {
+                            let remove_entity = entity.clone();
+                            let remove_path = path.clone();
+                            let remove = move |_: &gpui_kit::ClickEvent,
+                                               _: &mut gpui_kit::Window,
+                                               app: &mut App| {
+                                remove_entity.update(app, |this, cx| {
+                                    this.remove_scratchpad_import_path(&remove_path, cx)
+                                });
+                            };
+                            list = list.child(
+                                div()
+                                    .id(SharedString::from(format!("sp-import-row-{path}")))
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .w_full()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .hover(|s| s.bg(theme.colors.list_hover))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_xs()
+                                            .text_ellipsis()
+                                            .text_color(theme.colors.foreground)
+                                            .child(path.clone()),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "sp-import-del-{path}"
+                                        )))
+                                        .ghost()
+                                        .small()
+                                        .label("✕")
+                                        .on_click(remove),
+                                    ),
+                            );
+                        }
+                        body = body.child(list);
+                    }
+                    content.child(body)
+                }
+            })
+            .button_props(
+                DialogButtonProps::default()
+                    .show_cancel(true)
+                    .ok_text("导入")
+                    .on_ok(confirm),
+            )
+            .on_close(close)
+            .into_any_element()
+    }
+
     ///
     /// 内容每帧从 `scratchpad` 状态重读（勾选态随 toggle 更新）；勾选 / 新建走事件路径
     /// （`toggle_entry_tag` / `create_entry_tag`），本方法只装配。

@@ -111,9 +111,9 @@
 env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" \
   check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2
 
-# 单测（52 项：模块根隔离 / 路径防护 / 回收站来源 / 跨模块还原拒绝 / 旧布局迁移 / 引用状态与重定位 /
+# 单测（56 项，2026-11-28 实测：模块根隔离 / 路径防护 / 回收站来源 / 跨模块还原拒绝 / 旧布局迁移 / 引用状态与重定位 /
 # 绑定与最近执行回读 / 绝对路径→模块内相对路径 / 搜索区间 / 正则大小写 / 递归复制 / 替换 / 标签关联读写 /
-# Diff 行分类与两侧行号·行前级 / 面板纯函数（排序·压平·模板后缀·搜索结果映射·脏点判据）/
+# Diff 行分类与两侧行号·行前级 / 面板纯函数（排序·压平·模板后缀·搜索结果映射·脏点判据·粘贴落点）/
 # 后台任务（加载·粘贴·导入·搜索替换）/ 窗口级回归（树空白·面板尺寸·对齐断言·工具栏左右分组分离））
 env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-scratchpad -j 2 --lib
 
@@ -121,7 +121,7 @@ env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-sc
 env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-workbench --lib -j 2 scratchpad_meta
 ```
 
-- 单测覆盖**域逻辑 + 面板纯函数**（排序 / 压平 / 模板后缀 / 搜索结果映射）与后台任务；窗口级交互（多选、剪贴板、虚拟列表、替换栏）仍靠人工验收，见 `scratchpad-user-guide.md` §9。
+- 单测覆盖**域逻辑 + 面板纯函数**（排序 / 压平 / 模板后缀 / 搜索结果映射 / 粘贴落点）与后台任务；窗口级交互（多选、剪贴板真落盘、虚拟列表、替换栏）仍靠人工验收，见 `scratchpad-user-guide.md` §9 与 `scratchpad-backlog.md` §8。
 - 已知环境限制：本机 `rustdoc` 执行报 Windows `os error 448`（doctest 阶段），与本模块无关。
 
 ## 6. 文档地图
@@ -134,6 +134,7 @@ env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-wo
 | `scratchpad-prototype-design.md` | **长什么样**：面板布局 / 树与分组 / 交互规格 / 主题映射 / 落点映射 |
 | `scratchpad-prototype.html` | 可交互原型（RDS Light/Dark，可切主题） |
 | `scratchpad-dev-plan.md` | **做什么、做到哪**：Phase 划分 / 逐轮进度记录 / 测试场景 / 风险 / 映射 |
+| [`scratchpad-backlog.md`](./scratchpad-backlog.md) | **还差什么、值不值得换设计**：完成度分维度表 / 缺口台账（P1–P4，含状态）/ 本轮修复明细 / 更优设计方案 / 手动验收清单 |
 | `scratchpad-user-guide.md` | **怎么用**：入口 / 界面导览 / 典型流程 / 快捷键 / FAQ / 验收清单 |
 | [`../../../crates/scratchpad/README.md`](../../../crates/scratchpad/README.md) | crate 级特点提炼（不含设计细节） |
 
@@ -144,6 +145,11 @@ env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-wo
 | ~~系统文件拖入树导入~~ ✅ **已实现（2026-10-09）** | Phase C 余项 | OS 文件拖放（`FileDropEvent` → 面板根 3 事件 + 拖入提示条；过滤文件夹；复用导入任务） |
 | ~~命中跳转到具体行~~ ✅ **已实现（2026-10-09）** | Phase C 余项 | `ScratchpadSearchHitTarget{file,line,span}` → 打开文件并选中命中文本（行号 1 基 + 行内字节区间） |
 | ~~归档 / 取回 / 版本~~ ✅ **已通（资产库侧，copy 语义）** | Phase D | 本体在 `analytics_resource`（2026-10-13 裁决 copy）；草稿箱右键「归档为存档…」2026-11-06 接入。**余 K8**：归档时外部引用与 `file_meta` 的处置待产品裁决 |
+| ~~书签管理面~~ ✅ **已实现（2026-11-25）** | 跨文件书签 | 第四分区（VSCode 资源管理器式分区：多开均分 / 单开占满 / 收起沉底）；含便签 `label`；点击跳行。单文件书签在编辑器（Ctrl+Shift+B / F8）。**余**：归档侧只读查看（归档搬 sidecar，与 K8 同批）；树行书签角标（可选） |
+| ~~剪贴板粘贴入口~~ ✅ **已闭环（2026-11-28）** | 面板交互断链 | 新增 `ScratchpadPaste`（`ctrl-v` + 右键「粘贴」）：文件夹 → 目录内、文件 → 同级父目录、无选中/多选 → 模根；剪切成功后剪贴板清空。落点判据抽成纯函数并有单测 |
+| ~~导入改应用内弹窗~~ ✅ **已实现（2026-11-28，用户拍板）** | 形态统一 | 与「添加外部引用」同形态 Dialog：路径输入 +「加入」+「浏览…」回填 + 清单去重；系统文件选择器退为填表辅助 |
+| 批量替换的 Diff 预览 | **下一迭代** | 需两阶段 job 契约（先算计划零写盘 → 确认 → 校验指纹后写），不是 UI 提示能替代（见 backlog §7 建议 3） |
+| ~~未命名 SQL 看不到~~ ✅ **已闭环（2026-11-25）** | 编辑器联动 | 导航打开的 untitled 文档另存为**默认目录 = 草稿箱根**（`editor_files::attach` 端口加目录提供者），保存落 `scratchpad/` 后 watcher 自动上树 |
 | 属性面板组件形态 | 待拍板 | 数据已接 sidecar（2026-11-24）；当前 Dialog + DescriptionList，形态待用户确认 |
 | 工具栏按钮 hover 提示 | 对齐原型 | 原型 HTML 用 `title=`；gpui-kit 有 `.tooltip()` 可接（大部分入口已带） |
 | 冲突改真模态对话框（可选） | 待拍板 | 现为"冲突条 + 中央 Diff 面板"（内容等价、形式不同）；改模态需挂宿主 `open_dialog` 层 |

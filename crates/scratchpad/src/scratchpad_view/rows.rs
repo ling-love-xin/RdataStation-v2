@@ -377,10 +377,12 @@ impl ScratchpadView {
             String::new()
         };
 
-        // 右键菜单（归档为存档 / 打开位置 / 重命名 / 剪切 / 复制 / 删除）。
+        // 右键菜单（归档为存档 / 打开位置 / 重命名 / 剪切 / 复制 / 粘贴 / 删除）。
         {
             let menu_entity = entity.clone();
             let menu_key = key.clone();
+            // 剪贴板是否有内容（构造期取值：菜单闭包要求 `'static`，闭包内读不到 `self`）。
+            let has_clip = self.scratchpad.borrow().clipboard.is_some();
             // 文件夹没有「打开」与「归档为存档」（双击/Enter 的语义是展开）。
             let menu_open = entity.clone();
             let menu_open_key = key.clone();
@@ -402,6 +404,8 @@ impl ScratchpadView {
                 let cut_key = menu_key.clone();
                 let copy_entity = menu_entity.clone();
                 let copy_key = menu_key.clone();
+                let paste_entity = menu_entity.clone();
+                let paste_key = menu_key.clone();
                 let del_entity = menu_entity.clone();
                 let del_key = menu_key.clone();
                 let mut menu = menu;
@@ -486,8 +490,7 @@ impl ScratchpadView {
                             }
                         }));
                 }
-                let menu = menu;
-                menu.item(
+                let mut menu = menu.item(
                     PopupMenuItem::new(tr("重命名")).on_click(move |_, window, app| {
                         rename_entity.update(app, |this, cx| {
                             this.start_scratchpad_edit(
@@ -514,8 +517,19 @@ impl ScratchpadView {
                             std::iter::once(copy_key.clone()).collect();
                         this.set_scratchpad_clipboard(ScratchpadClipboardMode::Copy, cx);
                     });
-                }))
-                .separator()
+                }));
+                // 「粘贴」：只在剪贴板有内容时出现（避免点了没反应的入口），落点 = 本行
+                // （文件夹 → 目录内；文件 → 同级父目录，见 `scratchpad_paste_target`）。
+                if has_clip {
+                    menu = menu.item(PopupMenuItem::new(tr("粘贴")).on_click(move |_, _, app| {
+                        paste_entity.update(app, |this, cx| {
+                            this.scratchpad.borrow_mut().selected =
+                                std::iter::once(paste_key.clone()).collect();
+                            this.paste_scratchpad_clipboard(cx);
+                        });
+                    }));
+                }
+                menu.separator()
                 .item(PopupMenuItem::new(tr("删除")).on_click(move |_, _, app| {
                     del_entity.update(app, |this, cx| {
                         this.delete_scratchpad_entry(del_key.clone(), cx)
