@@ -45,17 +45,14 @@ impl ResultGridDelegate {
         match self.row_ref(row_ix)? {
             RowRef::Data(data_ix) => self.rows.get(data_ix)?.get(column).map(String::as_str),
             RowRef::Local(id) => self.local_cell(id, column),
-            // 【刀3】数组子行：只有被展开的那一列有值（其它列空白，对齐
-            // `SpreadsheetPresentation.getCellValue:2571` 的 `DBDVoid.INSTANCE`）
-            RowRef::ArrayChild {
-                row, column: child_column, index, ..
-            } => {
-                if child_column != column {
+            // 【刀3 / 分层 2026-11-27】数组子行：只有被展开的那一列有值（其它列空白，
+            // 对齐 `SpreadsheetPresentation.getCellValue:2571` 的 `DBDVoid.INSTANCE`）
+            RowRef::ArrayChild { key, index, .. } => {
+                let expansion = self.expanded_arrays.get(key)?;
+                if expansion.column != column {
                     return None;
                 }
-                self.expanded_array_values(row, child_column)?
-                    .get(index)
-                    .map(String::as_str)
+                expansion.values.get(index).map(String::as_str)
             }
         }
     }
@@ -449,19 +446,13 @@ impl ResultGridDelegate {
                 })
                 .unwrap_or_default(),
             // 【刀3】数组子行：只填被展开那一列的元素值，其它列空串
-            RowRef::ArrayChild {
-                row,
-                column,
-                index,
-                ..
-            } => {
+            RowRef::ArrayChild { key, index, .. } => {
                 let mut cells: Vec<String> = vec![String::new(); visible.len()];
-                if let Some(position) = visible.iter().position(|d| *d == column) {
-                    if let Some(value) = self
-                        .expanded_array_values(row, column)
-                        .and_then(|values| values.get(index))
-                    {
-                        cells[position] = value.clone();
+                if let Some(expansion) = self.expanded_arrays.get(key) {
+                    if let Some(position) = visible.iter().position(|d| *d == expansion.column) {
+                        if let Some(value) = expansion.values.get(index) {
+                            cells[position] = value.clone();
+                        }
                     }
                 }
                 cells

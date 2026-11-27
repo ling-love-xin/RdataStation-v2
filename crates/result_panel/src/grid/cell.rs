@@ -410,21 +410,24 @@ pub(crate) fn render_td(
     // 【刀2】数组列：`▶ 首值 [+N-1]`（三角在单元格内、文本前，间距 `INSIDE_MARGIN = 3`；
     // hint 在文本右侧，间距 `LEFT_MARGIN = 6` —— `GridCellRenderer.java:158-172` /
     // `renderHints:339`）。
-    // 【刀3】展开状态从 delegate 读（父数据行 + 数据列）；数组子行自己不再套一层三角
-    //（二级展开本仓没做，不给假图标）。
-    let row_reference = delegate.reference_of(row_ix);
-    let array_expanded = match row_reference {
-        Some(crate::rowset::RowRef::Data(data_row)) if !delegate.transposed => {
-            col_ix
-                .checked_sub(1)
-                .is_some_and(|view_col| delegate.is_array_expanded(data_row, delegate.data_column(view_col)))
-        }
-        _ => false,
-    };
-    let array_display = if row_reference.is_some_and(|reference| reference.is_array_child()) {
-        ArrayCellDisplay::Plain
+    // 【分层数组展开 2026-11-27】这一格对应的展开键：数据行的格子是顶层（path 空），
+    // 数组子行的格子是「它代表的那个元素」（path = 父条目的下钻链 + 自己的下标）。
+    // 子行元素本身又是数组时同样给三角——真值那边子行 element 是 `Collection` 就能继续
+    // 展开（`SpreadsheetPresentation.getChildren:2107-2136` 的 `col.toArray()`）。
+    let array_key = if delegate.transposed {
+        None
     } else {
-        array_cell::array_cell_display(kind, &text, array_expanded)
+        col_ix.checked_sub(1).and_then(|view_col| {
+            let column = delegate.data_column(view_col);
+            delegate.array_expand_key(row_ix, column)
+        })
+    };
+    let array_expanded = array_key
+        .as_ref()
+        .is_some_and(|(row, column, path)| delegate.is_array_expanded(*row, *column, path));
+    let array_display = match &array_key {
+        Some(_) => array_cell::array_cell_display(kind, &text, array_expanded),
+        None => ArrayCellDisplay::Plain,
     };
     // 【结果集配色槽】脏格 / 冲突格底色在闭包外先求值：`product_tokens::get` 要借 `cx`，
     // 而 `.when` 的闭包捕获后与后面的多次借用打架。
@@ -436,26 +439,24 @@ pub(crate) fn render_td(
     let in_cell_range = delegate.in_cell_range(row_ix, col_ix);
     let paints_range = in_cell_range && delegate.range_focus() != Some((row_ix, col_ix));
     let range_bg = theme.tokens.table_active;
-    // 【刀3】三角点击：展开 / 收起这一格数组（真值入口是行号槽三角
+    // 【刀3 / 分层 2026-11-27】三角点击：展开 / 收起这一格数组（真值入口是行号槽三角
     // `LightGrid.handleMouseDown:3117-3122`；本仓把三角画在单元格内、点的也是它，
     // 与截图形态一致）。行数会变 → 通知表格重算行数并重画。
+    // 展开键在渲染期算好（与三角几何同源）：顶层格子与子行元素格子走同一条动作，
+    // 只是 `path` 不同（子行就是往下钻一层）。
     // 先单独 clone：下面的右键闭包会把 `table` 整个 move 走。
     let toggle_array_expand = {
         let table = cx.entity().clone();
+        let key = array_key.clone();
         move |_: &MouseDownEvent, window: &mut Window, app: &mut App| {
-            let toggled = table.update(app, |state, cx| {
-                let delegate = state.delegate_mut();
-                let Some(crate::rowset::RowRef::Data(data_row)) = delegate.reference_of(row_ix) else {
-                    return None;
-                };
-                let column = delegate.data_column(col_ix.checked_sub(1)?);
-                delegate.toggle_array_expand(data_row, column);
+            let Some((row, column, path)) = key.clone() else {
+                return;
+            };
+            table.update(app, |state, cx| {
+                state.delegate_mut().toggle_array_expand(row, column, &path);
                 cx.notify();
-                Some(())
             });
-            if toggled.is_some() {
-                window.refresh();
-            }
+            window.refresh();
         }
     };
     let mut cell = div()

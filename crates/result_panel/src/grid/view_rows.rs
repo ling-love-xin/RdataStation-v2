@@ -580,18 +580,24 @@ impl ResultGridDelegate {
                 }
             }
         }
-        self.view_rows = Some(self.with_array_children(view));
+        let view = self.with_array_children(view);
+        self.view_rows = Some(view);
     }
 
-    /// 【刀3】把展开的数组元素铺成子行插进视图序列
+    /// 把展开的数组元素铺成子行插进视图序列（**支持逐级嵌套**）
     ///
-    /// 对齐 DBeaver `LightGrid.collectNestedRows:512-540`（嵌套行混进 `gridRows`）：
-    /// 每个父底层行之后，按**列号顺序**把每一列展开的元素各铺一段；`sub_index` 是
-    /// 组内铺平序号（行号 `1.1` / `1.2` 用 `sub_index + 1`，多列同时展开时继续累加，
-    /// 不会两列都从 `1.1` 起）。
+    /// 对齐 DBeaver `LightGrid.collectNestedRows:516-543`：父行之后铺它的子行，每个
+    /// 子行**自己若又展开着**就紧接着递归铺它的子行（真值那边是 `level + 1` 的递归，
+    /// `GridRowNested` 记父链）。本仓的层级在展开条目里（`ArrayExpansion.path`）。
+    ///
+    /// 铺平顺序：每个父底层行下，顶层条目按（列号, 元素下标）排；然后逐个元素铺行，
+    /// 元素下挂着的深层条目紧跟其后递归铺。`sub_index` 只在**顶层子行**之间累加
+    /// （行号 `1.1` / `1.2`；多列同时展开时继续累加，不会两列都从 `1.1` 起——沿用本仓
+    /// 既有取舍，真值按纯路径拼会重复）。深层子行的行号挂在所属顶层子行之下
+    /// （`1.1.1`），所以它们不占顶层编号。
     ///
     /// 本地行不产出子行（本地行的数组值不进解析口径，登记序追加在末尾的语义不变）。
-    fn with_array_children(&self, view: Vec<RowRef>) -> Vec<RowRef> {
+    fn with_array_children(&mut self, view: Vec<RowRef>) -> Vec<RowRef> {
         if self.expanded_arrays.is_empty() {
             return view;
         }
@@ -601,20 +607,67 @@ impl ResultGridDelegate {
             let RowRef::Data(row) = reference else {
                 continue;
             };
+            // 该行的顶层条目（`path` 为空），按（列号, 元素下标）排——多列同时展开时
+            // 子行块按列序出现（真值 `collectNestedRows` 也是先整列再下一列）
+            let mut tops: Vec<usize> = self
+                .expanded_arrays
+                .iter()
+                .enumerate()
+                .filter(|(_, expansion)| expansion.row == row && expansion.path.is_empty())
+                .map(|(key, _)| key)
+                .collect();
+            tops.sort_by_key(|key| {
+                self.expanded_arrays[*key].column
+            });
             let mut sub_index = 0usize;
-            for (&(_, column), values) in self.expanded_arrays.range((row, 0)..=(row, usize::MAX)) {
-                for index in 0..values.len() {
+            for key in tops {
+                let count = self.expanded_arrays[key].values.len();
+                for index in 0..count {
+                    self.expanded_arrays[key].top_no = sub_index;
                     out.push(RowRef::ArrayChild {
-                        row,
-                        column,
+                        key,
                         index,
                         sub_index,
                     });
                     sub_index += 1;
+                    self.push_nested_children(&mut out, key, index);
                 }
             }
         }
         out
+    }
+
+    /// 递归铺「某个子行自己又展开」的一层（真值 `collectNestedRows` 的 `level + 1`）
+    fn push_nested_children(
+        &mut self,
+        out: &mut Vec<RowRef>,
+        parent_key: usize,
+        parent_index: usize,
+    ) {
+        let (row, column) = (
+            self.expanded_arrays[parent_key].row,
+            self.expanded_arrays[parent_key].column,
+        );
+        let mut parent_path = self.expanded_arrays[parent_key].path.clone();
+        parent_path.push(parent_index);
+        let Some(key) = self.expanded_arrays.iter().position(|expansion| {
+            expansion.row == row && expansion.column == column && expansion.path == parent_path
+        }) else {
+            return;
+        };
+        let top_no = self.expanded_arrays[parent_key].top_no;
+        self.expanded_arrays[key].top_no = top_no;
+        let count = self.expanded_arrays[key].values.len();
+        for index in 0..count {
+            // 深层子行的 `sub_index` 是组内序号（行号不用它，行号走 path）；
+            // 这里仍填 `index` 以便同一套结构在铺平链路里保持自洽
+            out.push(RowRef::ArrayChild {
+                key,
+                index,
+                sub_index: index,
+            });
+            self.push_nested_children(out, key, index);
+        }
     }
 
     /// 行号槽的显示文本：数据行 / 本地行 = **数据行序号**（子行不占号）；数组子行 = `父序.子序`
@@ -641,7 +694,30 @@ impl ResultGridDelegate {
             .filter(|reference| !reference.is_array_child())
             .count();
         match reference {
-            RowRef::ArrayChild { sub_index, .. } => format!("{}.{}", before, sub_index + 1),
+            RowRef::ArrayChild {
+                key,
+                index,
+                sub_index,
+            } => {
+                let Some(expansion) = self.expanded_arrays.get(*key) else {
+                    return (before + 1).to_string();
+                };
+                if expansion.path.is_empty() {
+                    // 顶层子行：父行号 + 组内铺平序号（多列同时展开继续累加，本仓既有取舍）
+                    format!("{}.{}", before, sub_index + 1)
+                } else {
+                    // 更深一层：父行号 + 所属顶层子行的编号（`top_no`，跨列累加后与父行一致）
+                    // + 本条目的下钻链 + 本行元素下标（真值 `GridRowNested.toString:64-70`）
+                    let mut label = format!("{}.{}", before, expansion.top_no + 1);
+                    for step in &expansion.path[1..] {
+                        label.push('.');
+                        label.push_str(&(step + 1).to_string());
+                    }
+                    label.push('.');
+                    label.push_str(&(index + 1).to_string());
+                    label
+                }
+            }
             _ => (before + 1).to_string(),
         }
     }

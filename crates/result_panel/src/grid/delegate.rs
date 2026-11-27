@@ -131,6 +131,32 @@ pub(crate) struct FindFilter {
     pub(crate) criteria: crate::ports::FindCriteria,
 }
 
+/// 一条**数组展开条目**（层级键）：一个被展开的节点 + 该层解析出的元素文本。
+///
+/// 对齐真值：`GridRowNested` 以「父行 + 相对下标 + level」表达层级
+/// （`GridRowNested.java:30-36`），`toString` 按父链拼路径 `1.1.1`（`:64-70`）；
+/// `LightGrid.collectNestedRows:516-543` 递归铺平（每层 `level + 1`）。
+///
+/// 本仓把「父行 + 列 + 从顶层起的下钻路径」作为键：顶层条目的 `path` 为**空**（空 =
+/// 结果矩阵里那一格），更深一层在父路径后追加一个元素下标（`[0]` = 顶层第 1 个元素再展开）。
+/// 展开的那一刻解析一次并把元素文本缓存进 `values`，渲染路径只借 `&str`。
+pub(crate) struct ArrayExpansion {
+    /// 父底层数据行号
+    pub(crate) row: usize,
+    /// 被展开的数据列号（子行只在列上显示值，其它列空白）
+    pub(crate) column: usize,
+    /// 下钻路径：从顶层元素下标起逐级追加，长度 = 下钻层数（顶层 = 0）
+    pub(crate) path: Vec<usize>,
+    /// 本层元素的展示文本
+    pub(crate) values: Vec<String>,
+    /// 本节点的**顶层子行编号**（组内铺平序号，跨列累加）。
+    ///
+    /// 行号口径沿用本仓既有取舍（真值按纯路径拼、多列同时展开会重复）：
+    /// 顶层子行按铺平序连续编号，深层子行挂在所属顶层子行之下（`1.1.1`）。
+    /// 由 `with_array_children` 铺平时写回。
+    pub(crate) top_no: usize,
+}
+
 /// 网格数据（表头 + 行）
 #[derive(Default)]
 pub struct ResultGridDelegate {
@@ -269,12 +295,13 @@ pub struct ResultGridDelegate {
     /// 也不会把“已抓到的窗口”搞乱）。行号列显示的是**视图行号**，不是数据行号。
     /// 排序只作用底层行；本地行参与筛选命中、始终登记序追加末尾（#28-B1 拍板 D1）。
     pub(crate) view_rows: Option<Vec<RowRef>>,
-    /// 【刀3】数组展开状态：`(父数据行, 数据列) → 顶层元素展示文本`
+    /// 【层级数组展开】展开状态：每个条目 = 一个被展开的节点（父行 + 列 + 下钻路径）。
     ///
     /// 值里存的是**解析好的元素文本**（展开那一刻 parse 一次）：子行渲染直接借
-    /// `&str`，不在渲染路径里反复解析 PG 字面量。`BTreeMap` 保证行组内按列号有序
-    /// （多列同时展开时子行铺平顺序稳定，对齐 `LightGrid.collectNestedRows:512-540`）。
-    pub(crate) expanded_arrays: std::collections::BTreeMap<(usize, usize), Vec<String>>,
+    /// `&str`，不在渲染路径里反复解析 PG 字面量。用 `Vec` 而不是 `BTreeMap`：
+    /// 条目数是人工展开动作的量级，铺平顺序由 [`Self::with_array_children`] 显式排
+    /// （行组内按列号、同列按下钻路径），不依赖容器序。
+    pub(crate) expanded_arrays: Vec<ArrayExpansion>,
     /// 【T2a-4】这份结果能不能编辑（面板同步数据时算：`ResultEntry` 编辑判据 +
     /// 面板当前连接 / 项目只读防线；`false` 时双击不进入编辑）
     pub(crate) editable: bool,
@@ -970,54 +997,118 @@ impl ResultGridDelegate {
         self.local.as_ref().map_or(0, |set| set.local_count())
     }
 
-    /// 【刀3】这一格（父数据行 + 数据列）现在展开着吗
-    pub fn is_array_expanded(&self, data_row: usize, column: usize) -> bool {
-        self.expanded_arrays.contains_key(&(data_row, column))
+    /// 这一格（父数据行 + 数据列 + 从顶层起的下钻路径）现在展开着吗
+    ///
+    /// `path` 为空 = 结果矩阵里的那一格（顶层）；非空 = 展开出来的子行元素再展开的那一层。
+    pub fn is_array_expanded(&self, data_row: usize, column: usize, path: &[usize]) -> bool {
+        self.find_expansion(data_row, column, path).is_some()
     }
 
-    /// 【刀3】展开后的元素展示文本（子行渲染借它；未展开 = `None`）
-    pub(crate) fn expanded_array_values(&self, data_row: usize, column: usize) -> Option<&[String]> {
-        self.expanded_arrays
-            .get(&(data_row, column))
-            .map(Vec::as_slice)
+    /// 展开键 → 条目下标；没有这条条目 = 没展开
+    fn find_expansion(&self, data_row: usize, column: usize, path: &[usize]) -> Option<usize> {
+        self.expanded_arrays.iter().position(|expansion| {
+            expansion.row == data_row && expansion.column == column && expansion.path == path
+        })
     }
 
-    /// 【刀3】展开 / 收起一格数组，返回操作后是否展开
+    /// 某个视图行在某一**数据列**上的展开键：`(父数据行, 数据列, 下钻路径)`。
+    ///
+    /// - 底层数据行 → 结果矩阵那一格，`path` 为空（顶层）；
+    /// - 数组子行 → 它所属条目 + 它自己的下标（这一行代表那个元素，若它本身是数组，
+    ///   展开就是往下钻一层）；
+    /// - 其它（本地行 / 转置行 / 该列不属于这条子行）→ `None`。
+    pub(crate) fn array_expand_key(
+        &self,
+        row_ix: usize,
+        column: usize,
+    ) -> Option<(usize, usize, Vec<usize>)> {
+        match self.reference_of(row_ix)? {
+            RowRef::Data(data_row) => Some((data_row, column, Vec::new())),
+            RowRef::ArrayChild { key, index, .. } => {
+                let expansion = self.expanded_arrays.get(key)?;
+                if expansion.column != column {
+                    return None;
+                }
+                let mut path = expansion.path.clone();
+                path.push(index);
+                Some((expansion.row, expansion.column, path))
+            }
+            RowRef::Local(_) => None,
+        }
+    }
+
+    /// 展开 / 收起一格数组，返回操作后是否展开
     ///
     /// 口径（对齐 DBeaver `LightGrid.toggleRowExpand:3257-3296` + `SpreadsheetPresentation`）：
-    /// - 已展开 → 收起（子行消失）；
-    /// - 未展开 → 当场按 PG 字面量拆元素（展开那一刻解析一次，值缓存进
-    ///   [`Self::expanded_arrays`]）；解析失败 / 空数组 **不展开**（没有子行可铺）；
+    /// - 已展开 → 收起（该节点**与其下所有更深层**一起消失——子行不能悬空）；
+    /// - 未展开 → 当场按 PG 字面量拆元素（顶层取结果矩阵那一格、深层取父条目的元素文本；
+    ///   展开那一刻解析一次，值缓存进 [`Self::expanded_arrays`]）；解析失败 / 空数组
+    ///   **不展开**（没有子行可铺）；
     /// - 视图行序跟着重建（子行是视图行，不是数据行）。
-    pub fn toggle_array_expand(&mut self, data_row: usize, column: usize) -> bool {
-        if self.expanded_arrays.remove(&(data_row, column)).is_some() {
+    pub fn toggle_array_expand(&mut self, data_row: usize, column: usize, path: &[usize]) -> bool {
+        if self.collapse_expansion_at(data_row, column, path) {
             self.rebuild_view_rows();
             return false;
         }
-        if !self.expand_array_at(data_row, column) {
+        if !self.expand_array_at(data_row, column, path) {
             return false;
         }
         self.rebuild_view_rows();
         true
     }
 
-    /// 展开单格（解析 + 缓存元素），**不重建视图行序**——批量展开（行号槽三角）由调用方收口一次
-    fn expand_array_at(&mut self, data_row: usize, column: usize) -> bool {
+    /// 展开单层（解析 + 缓存元素），**不重建视图行序**——批量展开（行号槽三角）由调用方收口一次
+    fn expand_array_at(&mut self, data_row: usize, column: usize, path: &[usize]) -> bool {
         // 只有数组列的格子上有三角：别的列长得像字面量也不展开（真值按 `DBDComplexValue` 判）
         if self.column_kind(column + 1) != crate::store::ColumnKind::Array {
             return false;
         }
-        let Some(text) = self.rows.get(data_row).and_then(|row| row.get(column)) else {
-            return false;
+        let text = if path.is_empty() {
+            // 顶层：值来自结果矩阵那一格
+            let Some(text) = self.rows.get(data_row).and_then(|row| row.get(column)) else {
+                return false;
+            };
+            text.clone()
+        } else {
+            // 更深一层：父条目必须还展开着（父收着就没有挂点），值取父条目里那个元素
+            let Some(parent) = self.find_expansion(data_row, column, &path[..path.len() - 1]) else {
+                return false;
+            };
+            let Some(text) = self.expanded_arrays[parent].values.get(path[path.len() - 1]) else {
+                return false;
+            };
+            text.clone()
         };
-        let Some(items) = crate::store::parse_pg_array_literal(text) else {
+        let Some(items) = crate::store::parse_pg_array_literal(&text) else {
             return false;
         };
         if items.is_empty() {
             return false;
         }
         let values: Vec<String> = items.iter().map(|item| item.display()).collect();
-        self.expanded_arrays.insert((data_row, column), values);
+        self.expanded_arrays.push(ArrayExpansion {
+            row: data_row,
+            column,
+            path: path.to_vec(),
+            values,
+            top_no: 0,
+        });
+        true
+    }
+
+    /// 收起一个节点**及其所有更深层**（返回是否真的收了）
+    ///
+    /// 子层条目挂在父条目之下（路径前缀相同），父一收，整棵子树都得消失——否则
+    /// 视图里会留下「父已经收起、子行还挂着」的孤儿行。
+    fn collapse_expansion_at(&mut self, data_row: usize, column: usize, path: &[usize]) -> bool {
+        if self.find_expansion(data_row, column, path).is_none() {
+            return false;
+        }
+        self.expanded_arrays.retain(|expansion| {
+            !(expansion.row == data_row
+                && expansion.column == column
+                && expansion.path.starts_with(path))
+        });
         true
     }
 
@@ -1054,11 +1145,13 @@ impl ResultGridDelegate {
 
     /// 【行号槽三角】该行的三角字形：`None` = 没有可展开的数组；`▶` = 收起 / 部分展开；
     /// `▼` = 所有可展开列都展开（真值 `getRowState` + `isAllColumnsExpanded`，`LightGrid.java:3244-3255`）
+    ///
+    /// 只算**顶层**（`path` 为空）：行号槽的三角是行级开关，管的是结果矩阵里那一行的格子。
     pub fn row_expander_glyph(&self, data_row: usize) -> Option<&'static str> {
         let columns = self.row_expandable_columns(data_row);
         let expanded = columns
             .iter()
-            .filter(|column| self.is_array_expanded(data_row, **column))
+            .filter(|column| self.is_array_expanded(data_row, **column, &[]))
             .count();
         super::array_cell::row_expander_glyph(columns.len(), expanded)
     }
@@ -1075,17 +1168,18 @@ impl ResultGridDelegate {
         }
         let all_expanded = columns
             .iter()
-            .all(|column| self.is_array_expanded(data_row, *column));
+            .all(|column| self.is_array_expanded(data_row, *column, &[]));
         if all_expanded {
+            // 收起整行：连同各行下挂的深层条目一起（`collapse_expansion_at` 管子树）
             for column in columns {
-                self.expanded_arrays.remove(&(data_row, column));
+                self.collapse_expansion_at(data_row, column, &[]);
             }
             self.rebuild_view_rows();
             return true;
         }
         let mut changed = false;
         for column in columns {
-            if self.expand_array_at(data_row, column) {
+            if self.expand_array_at(data_row, column, &[]) {
                 changed = true;
             }
         }

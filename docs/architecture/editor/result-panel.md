@@ -10503,29 +10503,42 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
 
 #### 9.70.3 刀3：展开子行（`rowset.rs` / `delegate.rs` / `view_rows.rs` / `text.rs`）
 
-**行身份**：`RowRef::ArrayChild { row, column, index, sub_index }`（父底层行 + 数组列 +
-元素下标 + 组内铺平序号）；`data_index()` / `local_id()` 对子行一律 `None` —— 这一条让
+**行身份**：`RowRef::ArrayChild { key, index, sub_index }`（展开条目下标 + 元素下标 +
+组内铺平序号）。层级（父底层行 / 数据列 / 下钻路径）**不进行标识**，而是记在展开条目
+（`delegate::ArrayExpansion`）里 —— 这样 `RowRef` 仍是 `Copy + Hash`，105 处引用不必
+Clone 化。`data_index()` / `local_id()` 对子行一律 `None` —— 这一条让
 编辑 / 变更集 / 统计 / 导出 / 分组全部天然排除子行。
 
-**展开状态**：`ResultGridDelegate.expanded_arrays: BTreeMap<(data_row, column), Vec<String>>`。
-`toggle_array_expand` 在展开那一刻解析一次并缓存元素文本；非数组列 / 解析失败 / 空数组
-不展开。`collapse_all_arrays` / `set_data` / `clear` 三处清空（换结果不把旧行号的子行
-串过来）。
+**展开状态**：`ResultGridDelegate.expanded_arrays: Vec<ArrayExpansion>`，条目为
+`{ row, column, path: Vec<usize>, values: Vec<String>, top_no }`。`path` 从顶层起的
+下钻链（空 = 结果矩阵那一格，`[1,0]` = 顶层元素 2 的第 1 个元素，依此类推）。
+`toggle_array_expand(row, column, path)` 在展开那一刻解析一次并缓存元素文本；顶层取结果
+矩阵那一格，深层取**父条目** `values[path.last]`（父已收起则无挂点、直接失败）；非数组列 /
+解析失败 / 空数组不展开。`collapse_expansion_at` 收一个节点会连带收掉它**所有更深层**
+（否则留孤儿行）；`collapse_all_arrays` / `set_data` / `clear` 三处清空（换结果不把旧行号的
+子行串过来）。
 
-**铺平**：`view_rows.rs::with_array_children` 在每个父数据行后按**列号顺序**铺展开列的
-元素，`sub_index` 组内累加（同父两列同时展开不会出现两个 `1.1`）。`rebuild_view_rows`
-的「恒等映射」早退条件加 `expanded_arrays.is_empty()` —— 有展开必须物化。
+**铺平**：`view_rows.rs::with_array_children`（`&mut self`，`rebuild_view_rows` 拆两行避开
+借用冲突）在每个父数据行后按（列号, 元素下标）铺顶层条目；每个元素自己若又展开着，紧接着
+`push_nested_children` 递归铺它的子行 —— 对齐 `LightGrid.collectNestedRows:516-543` 的
+`level + 1` 递归。`sub_index` 只在**顶层子行**之间累加（同父两列同时展开不会出现两个
+`1.1`）；深层子行不占顶层编号。`rebuild_view_rows` 的「恒等映射」早退条件加
+`expanded_arrays.is_empty()` —— 有展开必须物化。
 
-**行号**：`row_label` 数据行 / 本地行 = **数据行序号**（子行不占号），子行 = `父序.子序`。
-对齐截图 2：展开第 1 行后，紧跟的数据行仍然叫 `2`。无展开时走原 O(1) 分支。
+**行号**：`row_label` 数据行 / 本地行 = **数据行序号**（子行不占号）。顶层子行 = `父序.子序`
+（`sub_index + 1`）；深层子行 = `父序.所属顶层子行号.path[1..] 各级 +1.本行元素下标 +1`
+（如 `1.1.1`），对齐 `GridRowNested.toString:64-70` 按父链逐级追加。对齐截图 2：展开第 1 行
+后，紧跟的数据行仍然叫 `2`。视图行序无子行时走原 O(1) 分支。
 
-**取值**：`text.rs::row_cell_text` 子行只在被展开那一列取元素，其它列空白（对齐
-`SpreadsheetPresentation.getCellValue:2571` 的 `DBDVoid.INSTANCE`）；整份 TSV / 整列复制
-/ 整行 JSON / INSERT 都跳过子行。
+**取值**：`text.rs::row_cell_text` 子行只在被展开那一列取元素（按条目 `column` 比对，深层
+同样），其它列空白（对齐 `SpreadsheetPresentation.getCellValue:2571` 的 `DBDVoid.INSTANCE`）；
+整份 TSV / 整列复制 / 整行 JSON / INSERT 都跳过子行。
 
-**点击**：`render_td` 从 delegate 读展开状态（父数据行 + 数据列），三角挂
-`on_mouse_down(Left)` → `toggle_array_expand` + `notify`，行数变化后 `window.refresh()`。
-数组子行本身不画第二层三角（二级展开本仓没做，不给假图标）。
+**点击**：`render_td` 用 `delegate.array_expand_key(row_ix, column)` 取展开键（数据行 → 顶层，
+数组子行 → 父条目 + 自己的下标），三角挂 `on_mouse_down(Left)` → `toggle_array_expand` +
+`notify`，行数变化后 `window.refresh()`。子行元素自身是数组（`ArrayItem::Nested`）时**同样
+给三角**，可以继续往下钻 —— 对齐 `SpreadsheetPresentation.getChildren:2107-2136`（子行
+element 是 `Collection` 就返回 `col.toArray()`）。
 
 **子行的非数据语义**（穷举补全的地方）：`edit.rs::begin_edit` 直接拒、`commit_edit`
 兜底丢弃；宿主 `crates/editor/src/view/host/exec/row_ops.rs` 五处分支 —— 新增锚点 `None`
@@ -10555,7 +10568,10 @@ JSON 树** —— 而网格里双击进去的是行内编辑框（一整条字�
 3. **非法字面量**：真值侧值本身是 `DBDCollection`（不存在「不是数组」）；本仓值是驱动
    文本，解析失败按普通文本画。
 4. **子行元素对齐**：按列 `Array` → 文本族左对齐，不按元素自身数值类型右对齐。
-5. **二级展开**：多维数组子行不再给三角（真值 `GridRowNested` 可逐级展开）。
+5. **深层子行没有缩进**：真值 `GridRowRenderer:73-86` 按 `LEVEL_SPACING`（= 图标宽）逐级右移
+   行头三角与行号；本仓行号槽固定 48px、槽内只画一个三角，层级只体现在行号文本
+   （`1.1.1`）上。逐级缩进需要行号槽按层级加宽，与固定槽宽冲突，暂不做。
+   （原记的「二级展开未做」已在 2026-11-27 补齐，见 §9.70.3。）
 
 #### 9.70.6 验证
 
@@ -10957,7 +10973,7 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 | 空数组 `{}` 保留原文（真值不画三角、文本落空串） | §9.70.5 |
 | 非法字面量按普通文本画（真值不存在「不是数组」的值） | §9.70.5 |
 | 子行元素按列 `Array` → 文本族左对齐（不按元素自身数值类型右对齐） | §9.70.5 |
-| 多维数组子行不再给三角（二级展开未做） | §9.70.5 |
+| 多维数组**逐级展开已补齐**（子行元素自身是数组同样给三角）；深层子行只体现在行号文本上，槽内不逐级缩进 | §9.70.3、§9.70.5 |
 
 ### 20.8 未对齐复核（2026-11-27）
 
@@ -10966,9 +10982,14 @@ preview 重建后 `PREVIEW_STAGE=5`：`[preview] copy_column_names -> Ok(Options
 
 #### 20.8.1 仍缺 · 本仓可做（不碰 vendor、不等模型）
 
-| 缺口 | 真值 | 本仓现状 | 定量 / 落点 |
-| --- | --- | --- | --- |
-| **多维数组二级展开** | `GridRowNested` 逐级可展开 | 子行不再给三角（键是 `(data_row, column)`，`delegate.rs:277`） | §9.70.5 第 5 条；要改成层级键 |
+**本档已清空。** 最后一格「多维数组二级展开」于 2026-11-27 落地：展开状态从
+`BTreeMap<(data_row, column), Vec<String>>` 改成条目表 `Vec<ArrayExpansion>`（条目带
+`path` 下钻链），`RowRef::ArrayChild` 保持 `Copy`（只留 `key/index/sub_index`），铺平改递归、
+行号按父链逐级拼、子行元素自身是数组同样给三角。见 §9.70.3。
+
+**本轮已从此档移出（2026-11-27，续）**：多维数组二级展开——原记的落点「要改成层级键」
+成立，实现与用例见 §9.70.3 与 `crates/result_panel/src/grid/tests.rs` 的
+`nested_array_expands_level_by_level`。
 
 **本轮已从此档移出（2026-11-27）**：获焦列四边框——原位记的落点（`delegate.cell_range().cursor().1`）
 成立，实现用的是绝对定位覆盖层而不是 `.border_*`（理由与残余 1px 口径见 §9.72.3 第 5 条），

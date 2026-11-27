@@ -35,19 +35,21 @@ pub enum RowRef {
     Data(usize),
     /// 本地行（叠加层分配的稳定 id；不随其它本地行增删滑移）
     Local(u64),
-    /// **数组展开子行**（刀3）：父底层行 + 数组列 + 元素下标
+    /// **数组展开子行**（刀3；2026-11-27 起因逐级嵌套改存层级键）
     ///
     /// 子行不是数据行：不可编辑、不进变更集 / 统计 / 导出 / 分组 / 文本视图，
     /// 只在被展开的那一列显示元素值（其它列空白）——对齐 DBeaver
     /// `GridRowNested` + `SpreadsheetPresentation.getCellValue:2571`（父格未展开返回
     /// `DBDVoid.INSTANCE`）。`sub_index` 是这一子行在**父行组内**的铺平序号（行号
     /// `1.1` / `1.2` 的后者用 `sub_index + 1`）。
+    ///
+    /// 层级信息不放在这里：`key` 指向 delegate 的
+    /// [`crate::grid::delegate::ArrayExpansion`]（父行 + 列 + 从顶层起的下钻路径都在
+    /// 那条目里），所以这个变体保持 `Copy`，视图层不必为每行持一份路径 `Vec`。
     ArrayChild {
-        /// 父底层数据行号
-        row: usize,
-        /// 被展开的数据列号
-        column: usize,
-        /// 这一列里的元素下标（0 基）
+        /// 展开条目在 `expanded_arrays` 里的下标（层级键）
+        key: usize,
+        /// 本条子行对应条目 `values` 里的元素下标（0 基）
         index: usize,
         /// 组内铺平序号（多列同时展开时继续累加，行号不重复）
         sub_index: usize,
@@ -95,15 +97,17 @@ impl RowRef {
         }
     }
 
-    /// 数组展开子行（刀3）：`(父底层行, 数据列, 元素下标, 组内序号)`
-    pub fn array_child_parts(&self) -> Option<(usize, usize, usize, usize)> {
+    /// 数组展开子行：`(展开条目下标, 元素下标, 组内序号)`
+    ///
+    /// 层级（父行 / 数据列 / 下钻路径）在条目里（`delegate::ArrayExpansion`），
+    /// 行标识里只留三个 `usize`，`RowRef` 才保持 `Copy`。
+    pub fn array_child_parts(&self) -> Option<(usize, usize, usize)> {
         match *self {
             Self::ArrayChild {
-                row,
-                column,
+                key,
                 index,
                 sub_index,
-            } => Some((row, column, index, sub_index)),
+            } => Some((key, index, sub_index)),
             _ => None,
         }
     }
@@ -343,8 +347,7 @@ mod tests {
     #[test]
     fn array_child_is_neither_data_nor_local_row() {
         let child = RowRef::ArrayChild {
-            row: 4,
-            column: 2,
+            key: 4,
             index: 1,
             sub_index: 1,
         };
@@ -353,7 +356,7 @@ mod tests {
         // 子行不是数据行：编辑 / 提交 / 行级动作一律靠父行号，这一条必须为 None
         assert_eq!(child.data_index(), None);
         assert_eq!(child.local_id(), None);
-        assert_eq!(child.array_child_parts(), Some((4, 2, 1, 1)));
+        assert_eq!(child.array_child_parts(), Some((4, 1, 1)));
         assert_eq!(RowRef::data(4).array_child_parts(), None);
         assert!(!RowRef::data(4).is_array_child());
     }
