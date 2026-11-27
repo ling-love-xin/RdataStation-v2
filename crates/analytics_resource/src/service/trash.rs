@@ -558,7 +558,7 @@ impl ArchiveService {
             let count: i64 = conn
                 .query_row(
                     "SELECT count(*) FROM duckdb_tables() \
-                     WHERE database_name = 'probe' AND schema_name = 'main' AND table_name = ?1",
+                     WHERE database_name = 'probe' AND table_name = ?1",
                     duckdb::params![table.as_str()],
                     |row| row.get(0),
                 )

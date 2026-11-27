@@ -746,16 +746,21 @@ pub(crate) fn analytics_columns(
     conn: &duckdb::Connection,
     table: &str,
 ) -> Result<Vec<(String, String, bool)>, String> {
+    // `schema.table` 与裸表名都认：表型资产只存在于 `rds_archive`。
+    let (schema, name) = table
+        .rsplit_once('.')
+        .map(|(schema, name)| (schema.trim_matches('"'), name.trim_matches('"')))
+        .unwrap_or(("main", table.trim_matches('"')));
     let mut stmt = conn
         .prepare(
             "SELECT column_name, data_type, is_nullable \
              FROM information_schema.columns \
-             WHERE table_name = ?1 AND table_schema = 'main' \
+             WHERE table_name = ?1 AND table_schema = ?2 \
              ORDER BY ordinal_position",
         )
         .map_err(|e| format!("读取列结构失败: {e}"))?;
     let rows = stmt
-        .query_map(duckdb::params![table], |row| {
+        .query_map(duckdb::params![name, schema], |row| {
             let nullable: String = row.get(2)?;
             Ok((row.get(0)?, row.get(1)?, nullable.eq_ignore_ascii_case("YES")))
         })

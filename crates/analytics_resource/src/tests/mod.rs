@@ -84,5 +84,4 @@ fn cleanup(dir: PathBuf) {
 
 mod folders;
 mod records;
-mod table_asset;
 mod tags;

@@ -23,6 +23,7 @@ use crate::{AnalyticsResource, AnalyticsResourceStore};
 pub mod archive;
 pub mod checkout;
 pub mod semantics;
+pub mod table_asset;
 pub mod trash;
 
 /// 事件广播容量：够覆盖面板重绘窗口即可，溢出由订阅方收到 `Lagged` 并整表刷新。

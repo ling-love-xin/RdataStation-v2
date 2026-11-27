@@ -58,9 +58,13 @@ impl ExportFormat {
     }
 }
 
-/// 表名转义（与 `result_set_actions::select_sql_for_table` 同一规则）。
+/// 表名转义（与 `result_set_actions::select_sql_for_table` 同一规则：
+/// `schema.table` 逐段加引号，普通表名只加一层）。
 fn quote_ident(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
+    name.split('.')
+        .map(|part| format!("\"{}\"", part.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// 在一条连接上把 `table` 写成 `path`（扩展名决定格式）。

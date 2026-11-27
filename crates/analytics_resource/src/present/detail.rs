@@ -179,7 +179,9 @@ fn detail_version_timeline(
             // 没问到副本清单时按“还在”呈现（`None` = 不知道，不是“没有”）：
             // 误报“副本已裁剪”比漏报更糟——用户会以为能还原的版本不能还原。
             has_copy: if is_table {
-                crate::table_asset::snapshot_table(&version.snapshot).is_some()
+                // 表资产的每一版都是冻结快照；快照索引在 `table_asset_versions`。
+                // 详情时间线目前只拿到资源版本行，表型统一按“可还原”呈现。
+                true
             } else {
                 copies.map_or(true, |copies| copies.contains(&version.version))
             },

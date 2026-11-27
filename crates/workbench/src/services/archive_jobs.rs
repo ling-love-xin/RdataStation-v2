@@ -140,20 +140,9 @@ fn archive(
         }
     };
 
-    let (rows, columns) = written;
-    // 表写完才谈得上登记（第 11 条：两步不可分）。登记失败**不回滚表**——
-    // 数据是用户的，不能因为索引没落上就把它丢掉；把两件事分开报，由回执说清。
-    let asset = match crate::services::persist_jobs::register_table_asset(
-        project_root,
-        dest_table,
-        dest_table,
-        rows,
-        columns,
-    ) {
-        Ok(outcome) => format!("，{}", outcome.notice()),
-        Err(reason) => format!("；表已落，但资产没登记上：{reason}"),
-    };
-    Ok((rows, asset))
+    let (rows, _columns) = written;
+    // 只落普通表；资产由用户后续显式归档（T8：存为表 ≠ 归档）。
+    Ok((rows, String::new()))
 }
 
 #[cfg(test)]

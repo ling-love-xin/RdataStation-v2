@@ -82,6 +82,18 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
         .list_file_asset_versions(&job.resource_id)
         .await
         .map_err(|e| format!("读取文件版本索引失败：{e}"))?;
+    let is_table =
+        crate::ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref())
+            == crate::ArchiveKind::AnalyticsTable;
+    let table_versions = if is_table {
+        service
+            .store()
+            .table_asset_versions(&job.resource_id)
+            .await
+            .map_err(|e| format!("读取表快照版本失败：{e}"))?
+    } else {
+        Vec::new()
+    };
     // 表型资产的本体是项目分析库里的一张表（不是文件）：没有 `file_rel_path`，
     // 不能因为“路径为空”就把当前版本标成「内容缺失」。
     let payload_ok = if crate::ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref())
@@ -169,7 +181,13 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
         seed: VersionDialogSeed {
             name: current.name.clone(),
             current_version: current.version,
-            rows: build_version_rows(&current, &versions, &file_versions, payload_ok),
+            rows: build_version_rows(
+                &current,
+                &versions,
+                &file_versions,
+                &table_versions,
+                payload_ok,
+            ),
             timeline: build_timeline_rows(&current, &versions, &events),
         },
     })

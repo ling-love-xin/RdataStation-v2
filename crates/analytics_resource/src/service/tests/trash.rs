@@ -2,6 +2,58 @@
 
 use super::*;
 
+/// 新表资产模型下最小可用的登记行：一条 `analytics_resources` + 一份冻结快照索引。
+///
+/// 回收站只处理登记行，不要求真正归档过 DuckDB，所以快照物理名由调用方给。
+async fn seed_table_asset(
+    service: &ArchiveService,
+    name: &str,
+    physical_table: &str,
+) -> crate::AnalyticsResource {
+    use crate::model::{ArchiveBinding, ArchiveKind, NewArchiveInput, PayloadMode};
+    use crate::store::table_asset::{NewTableSnapshot, SnapshotInstance};
+    use crate::table_asset::manifest::{
+        DataFingerprint, TableColumn, TableManifest, TableSchema,
+    };
+
+    let input = NewArchiveInput {
+        resource_type: "analysis".to_string(),
+        name: name.to_string(),
+        alias: None,
+        kind: ArchiveKind::AnalyticsTable,
+        content_hash: "seed".to_string(),
+        definition_sql: None,
+        row_count: Some(1),
+        column_count: Some(1),
+        file_rel_path: String::new(),
+        payload_mode: PayloadMode::Copy,
+        source_path: None,
+        file_size: None,
+        structured: true,
+        binding: ArchiveBinding {
+            promoted_from: None,
+            source_connection_id: None,
+            source_table: Some(physical_table.to_string()),
+        },
+        scope: "project".to_string(),
+    };
+    let schema = TableSchema::new(vec![TableColumn::new("id", "INTEGER", true, None, 0)])
+        .expect("schema");
+    let data = DataFingerprint::new(1, 1, "1", "1", Some("1".to_string()), Some("1".to_string()));
+    let manifest = TableManifest::build(&schema, &data).expect("manifest");
+    let snapshot = NewTableSnapshot {
+        snapshot_id: format!("snap_{physical_table}"),
+        instance: SnapshotInstance::Project,
+        physical_schema: "rds_archive".to_string(),
+        physical_table: physical_table.to_string(),
+    };
+    service
+        .store()
+        .insert_table_asset_with_version(input, physical_table, &manifest, &snapshot, None)
+        .await
+        .expect("登记表资产")
+}
+
 /// 移入回收站：本体离开 `resources/` 进入项目级回收站，索引行**软删**（列表与
 /// “按路径查存活行”都看不到，但记录本身还在，还原才能恢复别名 / 标签 / 指纹）。
 /// 永久删除与清空：都**只动本模块的**条目（回收站是共用的，删别人的东西不是清空）；
@@ -195,32 +247,23 @@ async fn t158_purge_clears_versions_semantics_refs_but_keeps_history() {
 /// 断言的是「动作之后履历里有它」，而不是两者同事务。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn table_asset_trash_cycles_the_registry_only() {
-    use crate::table_asset::{TableAssetRequest, register};
-
     let (service, dir) = test_service().await;
-    let registered = register(
-        service.store(),
-        TableAssetRequest {
-            name: "订单宽表".to_string(),
-            analytics_table: "res_t_order_wide".to_string(),
-            row_count: Some(120),
-            column_count: Some(6),
-        },
-    )
-    .await
-    .expect("登记表型资产");
+    let registered = seed_table_asset(&service, "订单宽表", "arc_t_order_wide").await;
 
-    // 还原前预检要看「分析库里那张表还在」：先把本体建出来。
+    // 还原前预检要看「快照物理表还在」：先把本体建到归档 schema。
     let analytics_db = engine::persistence::ProjectDatabaseManager::analysis_db_path(&dir);
     std::fs::create_dir_all(dir.join(".RSmeta")).expect("建 .RSmeta");
     {
         let conn = duckdb::Connection::open(&analytics_db).expect("建项目分析库");
-        conn.execute_batch("CREATE TABLE res_t_order_wide (id INTEGER);")
-            .expect("建表型本体");
+        conn.execute_batch(
+            "CREATE SCHEMA IF NOT EXISTS rds_archive;
+             CREATE TABLE rds_archive.arc_t_order_wide (id INTEGER);",
+        )
+        .expect("建表型快照");
     }
 
     let entry = service
-        .move_to_trash(&[registered.resource_id.clone()])
+        .move_to_trash(&[registered.id.clone()])
         .await
         .expect("表型应能移入回收站（只软删登记）")
         .remove(0);
@@ -231,13 +274,13 @@ async fn table_asset_trash_cycles_the_registry_only() {
     );
     let soft = service
         .store()
-        .get_resource_by_id(&registered.resource_id)
+        .get_resource_by_id(&registered.id)
         .await
         .expect("软删行仍可读");
     assert!(soft.deleted_at.is_some(), "登记行应软删");
     assert_eq!(
         soft.analytics_table.as_deref(),
-        Some("res_t_order_wide"),
+        Some("arc_t_order_wide"),
         "表名不应随登记软删而丢失"
     );
 
@@ -246,7 +289,7 @@ async fn table_asset_trash_cycles_the_registry_only() {
         .await
         .expect("回收站清单第三来源");
     assert!(
-        listed.iter().any(|r| r.id == registered.resource_id),
+        listed.iter().any(|r| r.id == registered.id),
         "表型软删行必须出现在回收站清单里"
     );
 
@@ -257,12 +300,12 @@ async fn table_asset_trash_cycles_the_registry_only() {
     assert!(restored.deleted_at.is_none(), "还原后登记行复活");
     assert_eq!(
         restored.analytics_table.as_deref(),
-        Some("res_t_order_wide"),
+        Some("arc_t_order_wide"),
         "还原本体指向不变"
     );
 
     let again = service
-        .move_to_trash(&[registered.resource_id.clone()])
+        .move_to_trash(&[registered.id.clone()])
         .await
         .expect("再次移入回收站")
         .remove(0);
@@ -273,7 +316,7 @@ async fn table_asset_trash_cycles_the_registry_only() {
     assert!(
         service
             .store()
-            .get_resource_by_id(&registered.resource_id)
+            .get_resource_by_id(&registered.id)
             .await
             .is_err(),
         "永久删除后登记行应彻底消失"
@@ -286,32 +329,23 @@ async fn table_asset_trash_cycles_the_registry_only() {
 /// 而不是复活一条指向空处的 Missing 行。
 #[tokio::test]
 async fn table_restore_refuses_when_analytics_table_is_gone() {
-    use crate::table_asset::{TableAssetRequest, register};
-
     let (service, dir) = test_service().await;
-    let registered = register(
-        service.store(),
-        TableAssetRequest {
-            name: "已丢的表".to_string(),
-            analytics_table: "res_t_gone".to_string(),
-            row_count: Some(1),
-            column_count: Some(1),
-        },
-    )
-    .await
-    .expect("登记表型资产");
+    let registered = seed_table_asset(&service, "已丢的表", "arc_t_gone").await;
 
-    // 项目分析库存在，但里面没有 `res_t_gone`（只放一张无关表，确保文件是真 DuckDB）。
+    // 项目分析库存在，但归档 schema 里没有 `arc_t_gone`。
     let analytics_db = engine::persistence::ProjectDatabaseManager::analysis_db_path(&dir);
     std::fs::create_dir_all(dir.join(".RSmeta")).expect("建 .RSmeta");
     {
         let conn = duckdb::Connection::open(&analytics_db).expect("建项目分析库");
-        conn.execute_batch("CREATE TABLE unrelated (id INTEGER);")
-            .expect("建无关表");
+        conn.execute_batch(
+            "CREATE SCHEMA IF NOT EXISTS rds_archive;
+             CREATE TABLE rds_archive.unrelated (id INTEGER);",
+        )
+        .expect("建无关表");
     }
 
     let entry = service
-        .move_to_trash(&[registered.resource_id.clone()])
+        .move_to_trash(&[registered.id.clone()])
         .await
         .expect("表型移入回收站")
         .remove(0);
@@ -321,13 +355,13 @@ async fn table_restore_refuses_when_analytics_table_is_gone() {
         .expect_err("表已不在，还原必须被拒");
     let message = format!("{error}");
     assert!(
-        message.contains("已经没有表") && message.contains("res_t_gone"),
+        message.contains("已经没有表") && message.contains("arc_t_gone"),
         "错误要说清哪张表没了，实际：{message}"
     );
     assert!(
         service
             .store()
-            .get_resource_by_id(&registered.resource_id)
+            .get_resource_by_id(&registered.id)
             .await
             .expect("软删行仍可读")
             .deleted_at

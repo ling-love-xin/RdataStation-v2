@@ -49,7 +49,12 @@ pub fn open_mock_from_analytics(shared: &Shared, table: &str, cx: &mut App) {
 /// 这与 `engine::duckdb::temp_table::quote_ident` 同一规则，但那是 `pub(crate)`，
 /// 跨 crate 拿不到，所以宿主侧留一份唯一实现（不要在各调用点各拼一次）。
 pub fn select_sql_for_table(table: &str) -> String {
-    format!("SELECT * FROM \"{}\"", table.replace('"', "\"\""))
+    let qualified = table
+        .split('.')
+        .map(|part| format!("\"{}\"", part.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(".");
+    format!("SELECT * FROM {qualified}")
 }
 
 /// 打开洞察面板并把这张表当作取样来源（链式再分析）。
@@ -62,27 +67,27 @@ pub fn analyze_table(shared: &Shared, table: &str, label: &str, cx: &mut App) {
     shared.open_insight_source_table(source, label.to_string(), cx);
 }
 
-/// 给项目分析库里**已经存在**的表补一个资产身份（数据对象面板「登记为资产」）。
+/// 把项目分析库里**已经存在**的普通表显式归档为表资产（数据对象面板「归档为表资产」）。
 ///
-/// 与 [`persist_to_project`] 的分工：那个是"搬数据 + 登记"（升级）；这个是"只写登记行"，
-/// 不搬、不涨版本。已经在库里、只是没身份的表走这条。
-pub fn register_table_asset(shared: &Shared, table: &str, label: &str, cx: &mut App) {
+/// 与 [`persist_to_project`] 的分工：那个把结果集落成普通表；这个冻结快照并消费源表。
+/// 已经在库里、只是尚未归档的表走这条。
+pub fn archive_table_asset(shared: &Shared, table: &str, label: &str, cx: &mut App) {
     if table.trim().is_empty() {
-        shared.say_error("登记为资产：目标表名为空", cx);
+        shared.say_error("归档为表资产：源表名为空", cx);
         return;
     }
     let Some(root) = shared.project_root() else {
-        shared.say_error("登记为资产需要打开项目", cx);
+        shared.say_error("归档为表资产需要打开项目", cx);
         return;
     };
-    let request = crate::services::persist_jobs::RegisterRequest {
+    let request = crate::services::persist_jobs::ArchiveTableJobRequest {
         project_root: root,
         label: label.to_string(),
         table: table.to_string(),
     };
-    match crate::services::persist_jobs::submit_register(request) {
-        Ok(()) => shared.say(format!("正在把「{label}」登记为资产…"), cx),
-        Err(error) => shared.say_error(format!("登记为资产失败：{error}"), cx),
+    match crate::services::persist_jobs::submit_archive_table(request) {
+        Ok(()) => shared.say(format!("正在把「{label}」归档为表资产…"), cx),
+        Err(error) => shared.say_error(format!("归档为表资产失败：{error}"), cx),
     }
 }
 

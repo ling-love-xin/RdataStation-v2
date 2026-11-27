@@ -29,6 +29,7 @@ pub fn build_version_rows(
     current: &AnalyticsResource,
     versions: &[crate::store::rows::ResourceVersion],
     file_versions: &[crate::store::file_asset::FileAssetVersion],
+    table_versions: &[crate::store::table_asset::TableAssetVersion],
     payload_ok: bool,
 ) -> Vec<VersionRow> {
     let mut candidates = vec![Candidate {
@@ -46,23 +47,37 @@ pub fn build_version_rows(
     let is_global_ref = crate::ArchiveKind::from_db_str(&current.kind)
         == crate::ArchiveKind::TableRef
         && current.origin_kind.as_deref() == Some(crate::model::ORIGIN_KIND_GLOBAL);
-    for version in versions {
-        // 快照是当时那条资源记录的序列化；字段结构随迁移演进，解析不出来不算错。
-        let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
-        candidates.push(Candidate {
-            version: version.version,
-            size: snapshot.as_ref().and_then(|record| record.file_size),
-            hash: snapshot
-                .as_ref()
-                .and_then(|record| record.content_hash.clone()),
-            time: version.created_at,
-            is_current: false,
-            has_copy: if is_table {
-                crate::table_asset::snapshot_table(&version.snapshot).is_some()
-            } else {
-                file_versions.iter().any(|file| file.version == version.version)
-            },
-        });
+    if is_table {
+        // 表资产的历史版本只认快照索引：一版一张冻结快照，manifest 就是内容指纹。
+        // 旧 `analytics_resource_versions` 的 JSON 快照不再参与表型版本历史。
+        for version in table_versions
+            .iter()
+            .filter(|version| version.version != current.version)
+        {
+            candidates.push(Candidate {
+                version: version.version,
+                size: None,
+                hash: Some(version.manifest_id.clone()),
+                time: version.created_at,
+                is_current: false,
+                has_copy: true,
+            });
+        }
+    } else {
+        for version in versions {
+            // 快照是当时那条资源记录的序列化；字段结构随迁移演进，解析不出来不算错。
+            let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
+            candidates.push(Candidate {
+                version: version.version,
+                size: snapshot.as_ref().and_then(|record| record.file_size),
+                hash: snapshot
+                    .as_ref()
+                    .and_then(|record| record.content_hash.clone()),
+                time: version.created_at,
+                is_current: false,
+                has_copy: file_versions.iter().any(|file| file.version == version.version),
+            });
+        }
     }
     candidates.sort_unstable_by(|a, b| b.version.cmp(&a.version));
 

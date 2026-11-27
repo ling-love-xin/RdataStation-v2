@@ -223,27 +223,18 @@ impl WorkbenchView {
                         if let Some(outcome) = crate::services::persist_jobs::take_outcome() {
                             use crate::services::persist_jobs::PersistOutcome;
                             match outcome {
-                            PersistOutcome::Done { table, rows, columns, label, asset } => {
-                                // 两件事分开报：表写成是事实，资产登记上没上是另一件事。
-                                // 登记失败不回滚表（数据是用户的），提示里必须说清半截状态。
-                                match asset {
-                                    Ok(asset) => this.shared.say(
-                                        format!(
-                                            "{}（项目分析库 {table}，{rows} 行{})",
-                                            asset.notice(),
-                                            columns
-                                                .map(|count| format!("，{count} 列"))
-                                                .unwrap_or_default()
-                                        ),
-                                        cx,
+                            PersistOutcome::Done { table, rows, columns, label } => {
+                                // T8：存为表只落普通表，不再自动登记资产；
+                                // 要变成资产，用户随后在数据对象面板显式归档。
+                                this.shared.say(
+                                    format!(
+                                        "「{label}」已写成项目表 {table}（{rows} 行{}）",
+                                        columns
+                                            .map(|count| format!("，{count} 列"))
+                                            .unwrap_or_default()
                                     ),
-                                    Err(reason) => this.shared.say_error(
-                                        format!(
-                                            "「{label}」已写成项目表 {table}，但没登记成资产：{reason}"
-                                        ),
-                                        cx,
-                                    ),
-                                }
+                                    cx,
+                                );
                                 // 落库改了项目分析库的表清单：数据对象面板的那份缓存不会自己变，
                                 // 不重取的话「升级为资产」之后清单里看不见新表。
                                 if let Some(tab) = this.right_data_objects_tab.clone() {
@@ -265,22 +256,22 @@ impl WorkbenchView {
                                 .say_error(format!("「{label}」持久化失败：{reason}"), cx),
                             }
                         }
-                        // 「登记为资产」回执：只写登记行，成功后资产清单要多一行，
+                        // 「归档为表资产」回执：成功后资产清单要多一行，
                         // 与落库同一条理由（面板缓存不会自己变）。
                         if let Some(outcome) =
-                            crate::services::persist_jobs::take_register_outcome()
+                            crate::services::persist_jobs::take_archive_table_outcome()
                         {
-                            use crate::services::persist_jobs::RegisterOutcome;
+                            use crate::services::persist_jobs::ArchiveTableOutcome;
                             match outcome {
-                                RegisterOutcome::Done { notice } => {
+                                ArchiveTableOutcome::Done { notice } => {
                                     this.shared.say(notice, cx);
                                     if let Some(tab) = this.right_data_objects_tab.clone() {
                                         tab.update(cx, |tab, cx| tab.refresh(cx));
                                     }
                                 }
-                                RegisterOutcome::Failed { label, reason } => this
+                                ArchiveTableOutcome::Failed { label, reason } => this
                                     .shared
-                                    .say_error(format!("「{label}」登记资产失败：{reason}"), cx),
+                                    .say_error(format!("「{label}」归档为表资产失败：{reason}"), cx),
                             }
                         }
                     })

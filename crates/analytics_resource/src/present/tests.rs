@@ -785,7 +785,7 @@ fn version_rows_include_current_and_compare_adjacent_versions() {
 
     // 只有 v2 还有 manifest：v1 的已随旧方案删除。
     let file_versions = vec![file_version(2)];
-    let rows = build_version_rows(&current, &history, &file_versions, true);
+    let rows = build_version_rows(&current, &history, &file_versions, &[], true);
     let versions: Vec<i32> = rows.iter().map(|row| row.version).collect();
     assert_eq!(versions, vec![3, 2, 1], "降序，且当前版本也在列表里");
     assert!(rows[0].is_current);
@@ -812,7 +812,7 @@ fn version_rows_tolerate_unreadable_snapshots() {
         created_at: Utc::now(),
     };
 
-    let rows = build_version_rows(&current, &[broken], &[], false);
+    let rows = build_version_rows(&current, &[broken], &[], &[], false);
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[1].hash_short, "—", "解析不出来的快照不伪造指纹");
     assert_eq!(rows[1].size_label, "");

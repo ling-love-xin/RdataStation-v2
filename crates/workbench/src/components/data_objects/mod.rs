@@ -764,7 +764,7 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             group: Group::Table,
             pill: "未登记",
             version: None,
-            // 项目分析库挂在分析实例上，表名裸名可见（与「登记为资产」同一口径）
+            // 项目分析库挂在分析实例上，表名裸名可见（与表资产归档同一口径）
             sql_ref: Some(sql_ident(&name)),
             expand_via: None,
             source_action: None,
@@ -838,8 +838,11 @@ pub fn objects(collected: &Collected) -> Vec<Object> {
             },
             pill: "资产",
             version: Some(asset.version),
-            // 表型资产才有 SQL 引用（文件型本体是 `resources/` 下的副本，不是库里的表）
-            sql_ref: asset.analytics_table.as_deref().map(sql_ident),
+            // 表型资产只有归档 schema 里的只读快照，SQL 引用必须带 schema。
+            sql_ref: asset
+                .analytics_table
+                .as_deref()
+                .map(|table| sql_ident(&format!("rds_archive.{table}"))),
             expand_via: None,
             source_action: None,
         });
@@ -1452,9 +1455,12 @@ fn file_source_rows(collected: &Collected, want_mounted: bool) -> Vec<(String, S
 }
 
 /// SQL 标识符的转义口径（与 `result_set_actions::select_sql_for_table` 同一规则：
-/// 表名可能带引号，`tmp_i_` 的描述段来自用户）。
+/// 表名可能带引号，`tmp_i_` 的描述段来自用户；`schema.table` 逐段加引号）。
 pub fn sql_ident(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
+    name.split('.')
+        .map(|part| format!("\"{}\"", part.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// 这一行能不能「存到项目分析库」。

@@ -112,12 +112,25 @@ impl ArchiveService {
         if current.deleted_at.is_some() {
             return Err(service_err("restore", "存档已删除，无法还原"));
         }
-        // 表型资产走另一条还原：本体是项目分析库里的一张表，**没有副本文件**，
-        // 回退 = 把表名指回旧版本那张表（两张表都还在，不搬数据、不删新表）。
+        // 表型资产走快照闭环：恢复 = 新生成一版指向旧快照，零复制、不改写历史。
         if crate::ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref())
             == crate::ArchiveKind::AnalyticsTable
         {
-            return self.restore_table_version(&current, version).await;
+            let outcome = crate::service::table_asset::restore_table_asset_version(
+                &self.store,
+                &current.id,
+                version,
+            )
+            .await?;
+            self.emit(ChangeReason::Restored, Some(outcome.resource_id.clone()));
+            return Ok(ArchiveOutcome {
+                resource_id: outcome.resource_id,
+                version: outcome.version,
+                content_hash: outcome.manifest_id,
+                file_rel_path: String::new(),
+                created_new_version: outcome.created_new_version,
+                notes: Vec::new(),
+            });
         }
         // reference 模式的本体在源位置，不归 M6 管辖——"还原为旧版本"意味着覆盖源文件，
         // 那可能正是用户工作区里在用的活文件，风险不可控；M6 定位"留存 + 版本"不做覆盖外部源。
@@ -248,69 +261,6 @@ impl ArchiveService {
             file_rel_path: rel_path,
             created_new_version: true,
             // 还原不带标签 / 分组：那两项是归档入口的事。
-            notes: Vec::new(),
-        })
-    }
-
-    /// 表型资产的还原：把本体表名指回快照里那张旧表，生成新版本（历史不动）。
-    ///
-    /// 与文件型还原的区别只有一点：**不碰任何数据**。旧表还在项目库里，回退只改
-    /// 登记行的指向；当前版本那张表也原样留着（所以"回退"之后还能再回退回去）。
-    async fn restore_table_version(
-        &self,
-        current: &AnalyticsResource,
-        version: i32,
-    ) -> Result<ArchiveOutcome, CoreError> {
-        let versions = self.store.get_resource_versions(&current.id).await?;
-        let snapshot = versions
-            .iter()
-            .find(|row| row.version == version)
-            .ok_or_else(|| service_err("restore", &format!("找不到 v{version} 的版本快照")))?;
-        let target = crate::table_asset::snapshot_table(&snapshot.snapshot).ok_or_else(|| {
-            service_err(
-                "restore",
-                &format!("v{version} 的快照里没有本体表名，无法回退"),
-            )
-        })?;
-        let hash = crate::table_asset::table_fingerprint(&target);
-        // 幂等：要回退到的就是当前指的那张表，什么都不做（与文件型的指纹守卫同一口径）。
-        if current.analytics_table.as_deref() == Some(target.as_str()) {
-            return Ok(ArchiveOutcome {
-                resource_id: current.id.clone(),
-                version: current.version,
-                content_hash: current.content_hash.clone().unwrap_or_default(),
-                file_rel_path: String::new(),
-                created_new_version: false,
-                notes: Vec::new(),
-            });
-        }
-        let snapshot_of_current = serde_json::to_string(current).map_err(|e| {
-            CoreError::storage(StorageError::Serialization {
-                format: "JSON".to_string(),
-                reason: e.to_string(),
-            })
-        })?;
-        let detail = format!("回退到 v{version} 的表 {target}");
-        let updated = self
-            .store
-            .append_table_version(
-                &current.id,
-                current.version,
-                &target,
-                &snapshot_of_current,
-                &hash,
-                crate::model::TimelineEventKind::Restored,
-                Some(&detail),
-            )
-            .await?;
-        // 清单 / 详情面板靠这条广播刷新（与文件型还原同一个理由）。
-        self.emit(ChangeReason::Restored, Some(updated.id.clone()));
-        Ok(ArchiveOutcome {
-            resource_id: updated.id,
-            version: updated.version,
-            content_hash: hash,
-            file_rel_path: String::new(),
-            created_new_version: true,
             notes: Vec::new(),
         })
     }

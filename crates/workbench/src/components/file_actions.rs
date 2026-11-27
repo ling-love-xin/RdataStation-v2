@@ -41,12 +41,26 @@ impl ExportDest {
 /// 表名本身可能带引号（`odd"name`）：标识符里的 `""` 必须还原成 `"`，
 /// 否则导出的是另一张（不存在的）表。
 pub fn bare_table_name(sql_ref: &str) -> String {
-    let trimmed = sql_ref.trim();
-    let inner = trimmed
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .unwrap_or(trimmed);
-    inner.replace("\"\"", "\"")
+    let names = table_ref_parts(sql_ref);
+    names.last().cloned().unwrap_or_default()
+}
+
+/// 引用名 → 可执行的限定名（`"rds_archive"."arc_1"` → `rds_archive.arc_1`）。
+pub fn table_ref_name(sql_ref: &str) -> String {
+    table_ref_parts(sql_ref).join(".")
+}
+
+fn table_ref_parts(sql_ref: &str) -> Vec<String> {
+    sql_ref
+        .trim()
+        .split('.')
+        .map(|part| {
+            part.strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(part)
+                .replace("\"\"", "\"")
+        })
+        .collect()
 }
 
 /// 把一行对象按 SQL 引用名写到**指定文件**（导出窗口的自定义目录用）。
@@ -61,7 +75,7 @@ pub fn export_table_to_path(
     verb: &str,
     cx: &mut App,
 ) -> bool {
-    let table = bare_table_name(sql_ref);
+    let table = table_ref_name(sql_ref);
     if table.trim().is_empty() {
         shared.say_error(format!("{verb}：目标表名为空"), cx);
         return false;
@@ -103,7 +117,8 @@ pub fn export_table_to(
     format: engine::duckdb::export::ExportFormat,
     cx: &mut App,
 ) {
-    let table = bare_table_name(sql_ref);
+    let table = table_ref_name(sql_ref);
+    let stem = bare_table_name(sql_ref);
     if table.trim().is_empty() {
         shared.say_error(format!("{}：目标表名为空", dest.verb()), cx);
         return;
@@ -128,7 +143,7 @@ pub fn export_table_to(
         .unwrap_or(0);
     let path = dir.join(format!(
         "{}_{secs}.{}",
-        export_file_stem(&table),
+        export_file_stem(&stem),
         format.extension()
     ));
     let _ = export_table_to_path(shared, sql_ref, &path, dest.verb(), cx);

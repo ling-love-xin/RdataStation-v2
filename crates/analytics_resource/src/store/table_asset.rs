@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 use shared::error::{CoreError, StorageError};
 
+use crate::model::{NewArchiveInput, TimelineEventKind};
+use crate::AnalyticsResource;
 use crate::table_asset::manifest::TableManifest;
 
 use super::AnalyticsResourceStore;
@@ -174,37 +176,15 @@ impl AnalyticsResourceStore {
         let result = (|| -> Result<(), CoreError> {
             Self::ensure_table_manifest_on(inner, &input.manifest, &now)?;
             Self::insert_table_snapshot_on(inner, &input.snapshot, &input.manifest.manifest_id, &now)?;
-            inner
-                .execute(
-                    r#"
-                    INSERT INTO table_asset_versions (
-                        asset_id, version, snapshot_id, manifest_id, parent_version, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    "#,
-                    rusqlite::params![
-                        &input.asset_id,
-                        input.version,
-                        &input.snapshot.snapshot_id,
-                        &input.manifest.manifest_id,
-                        input.parent_version,
-                        &now,
-                    ],
-                )
-                .map_err(|error| {
-                    let text = error.to_string();
-                    if text.contains("UNIQUE") || text.contains("unique") {
-                        tav_err(
-                            "insert_version",
-                            format!(
-                                "资产 {} 已有版本 {}，不能重复提交",
-                                input.asset_id, input.version
-                            ),
-                        )
-                    } else {
-                        tav_err("insert_version", error)
-                    }
-                })?;
-            Ok(())
+            Self::insert_table_version_on(
+                inner,
+                &input.asset_id,
+                input.version,
+                input.parent_version,
+                &input.snapshot.snapshot_id,
+                &input.manifest.manifest_id,
+                &now,
+            )
         })();
         match result {
             Ok(()) => inner
@@ -215,6 +195,177 @@ impl AnalyticsResourceStore {
                 Err(error)
             }
         }
+    }
+
+    /// 首次归档：登记行 + v1 版本索引同一事务。
+    ///
+    /// 旧路径的 `insert_table_archive_with_event` 不写 `table_asset_versions`，
+    /// 新表资产必须三者一起落地，失败则一行都不留。
+    pub async fn insert_table_asset_with_version(
+        &self,
+        input: NewArchiveInput,
+        analytics_table: &str,
+        manifest: &TableManifest,
+        snapshot: &NewTableSnapshot,
+        detail: Option<&str>,
+    ) -> Result<AnalyticsResource, CoreError> {
+        let conn = self.get_conn().await?;
+        let inner = conn.inner()?;
+        let id = format!("ar_{}", Uuid::new_v4().simple());
+        let now = Utc::now().to_rfc3339();
+        inner
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|error| tav_err("begin_first", error))?;
+        let result = (|| -> Result<(), CoreError> {
+            Self::insert_archive_on(inner, &input, &id, &now, Some(analytics_table))?;
+            Self::record_event_on(
+                inner,
+                &id,
+                Some(1),
+                TimelineEventKind::Archived,
+                detail,
+                Some(&manifest.manifest_id),
+            )?;
+            Self::ensure_table_manifest_on(inner, manifest, &now)?;
+            Self::insert_table_snapshot_on(inner, snapshot, &manifest.manifest_id, &now)?;
+            Self::insert_table_version_on(
+                inner,
+                &id,
+                1,
+                None,
+                &snapshot.snapshot_id,
+                &manifest.manifest_id,
+                &now,
+            )
+        })();
+        match result {
+            Ok(()) => inner
+                .execute_batch("COMMIT")
+                .map_err(|error| tav_err("commit_first", error))?,
+            Err(error) => {
+                let _ = inner.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+        self.get_resource_by_id(&id).await
+    }
+
+    /// 追加一版并把资产头指到这份快照；可选把 checkout 租约一起消费。
+    ///
+    /// 乐观锁：`parent_version` 必须等于登记行当前 `version`，否则整笔回滚。
+    /// 这里不写旧 JSON 快照、不碰 `parent_version_id`——表资产版本链的唯一权威是
+    /// `table_asset_versions`。
+    pub async fn commit_table_version_to_head(
+        &self,
+        input: &NewTableVersion,
+        event_kind: TimelineEventKind,
+        detail: Option<&str>,
+        consume_lease: Option<&str>,
+    ) -> Result<AnalyticsResource, CoreError> {
+        let parent_version = input
+            .parent_version
+            .ok_or_else(|| tav_err("advance_head", "追加版本必须给 parent_version"))?;
+        if input.version != parent_version + 1 {
+            return Err(tav_err(
+                "advance_head",
+                format!(
+                    "版本号不连续：v{} 之后只能是 v{}",
+                    parent_version,
+                    parent_version + 1
+                ),
+            ));
+        }
+        let conn = self.get_conn().await?;
+        let inner = conn.inner()?;
+        let now = Utc::now().to_rfc3339();
+        inner
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(|error| tav_err("begin_advance", error))?;
+        let result = (|| -> Result<(), CoreError> {
+            Self::ensure_table_manifest_on(inner, &input.manifest, &now)?;
+            Self::insert_table_snapshot_on(
+                inner,
+                &input.snapshot,
+                &input.manifest.manifest_id,
+                &now,
+            )?;
+            Self::insert_table_version_on(
+                inner,
+                &input.asset_id,
+                input.version,
+                input.parent_version,
+                &input.snapshot.snapshot_id,
+                &input.manifest.manifest_id,
+                &now,
+            )?;
+            let affected = inner
+                .execute(
+                    r#"
+                    UPDATE analytics_resources
+                    SET version = ?, analytics_table = ?, content_hash = ?,
+                        row_count = ?, column_count = ?, parent_version_id = NULL,
+                        updated_at = ?
+                    WHERE id = ? AND version = ? AND deleted_at IS NULL
+                    "#,
+                    rusqlite::params![
+                        input.version,
+                        &input.snapshot.physical_table,
+                        &input.manifest.manifest_id,
+                        input.manifest.row_count,
+                        input.manifest.column_count,
+                        &now,
+                        &input.asset_id,
+                        parent_version,
+                    ],
+                )
+                .map_err(|error| tav_err("update_head", error))?;
+            if affected == 0 {
+                return Err(tav_err(
+                    "update_head",
+                    format!(
+                        "资产 {} 的当前版本已不是 v{}，拒绝覆盖",
+                        input.asset_id, parent_version
+                    ),
+                ));
+            }
+            Self::record_event_on(
+                inner,
+                &input.asset_id,
+                Some(input.version),
+                event_kind,
+                detail,
+                Some(&input.manifest.manifest_id),
+            )?;
+            if let Some(lease_id) = consume_lease {
+                let affected = inner
+                    .execute(
+                        r#"
+                        UPDATE table_checkout_leases
+                        SET state = 'consumed', closed_at = ?, consumed_version = ?
+                        WHERE lease_id = ? AND asset_id = ? AND state = 'active'
+                        "#,
+                        rusqlite::params![&now, input.version, lease_id, &input.asset_id],
+                    )
+                    .map_err(|error| tav_err("consume_lease_in_tx", error))?;
+                if affected == 0 {
+                    return Err(tav_err(
+                        "consume_lease_in_tx",
+                        format!("租约 {lease_id} 不存在、已结束或不属于该资产"),
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => inner
+                .execute_batch("COMMIT")
+                .map_err(|error| tav_err("commit_advance", error))?,
+            Err(error) => {
+                let _ = inner.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+        self.get_resource_by_id(&input.asset_id).await
     }
 
     /// 读取一份 manifest。
@@ -455,6 +606,30 @@ impl AnalyticsResourceStore {
         Ok(())
     }
 
+    /// 按 manifest 找一份项目可达快照（同内容复用，避免重复 CTAS）。
+    pub async fn table_snapshot_for_manifest(
+        &self,
+        manifest_id: &str,
+        instance: SnapshotInstance,
+    ) -> Result<Option<TableSnapshot>, CoreError> {
+        let conn = self.get_conn().await?;
+        conn.inner()?
+            .query_row(
+                r#"
+                SELECT snapshot_id, manifest_id, instance, physical_schema, physical_table,
+                       state, created_at, verified_at
+                FROM table_snapshots
+                WHERE manifest_id = ? AND instance = ? AND state = 'live'
+                ORDER BY created_at ASC
+                LIMIT 1
+                "#,
+                rusqlite::params![manifest_id, instance.as_str()],
+                map_snapshot,
+            )
+            .optional()
+            .map_err(|error| tav_err("snapshot_by_manifest", error))
+    }
+
     /// 某快照被多少个版本引用（GC 的保留判据之一）。
     pub async fn snapshot_version_refs(&self, snapshot_id: &str) -> Result<i64, CoreError> {
         let conn = self.get_conn().await?;
@@ -465,6 +640,44 @@ impl AnalyticsResourceStore {
                 |row| row.get(0),
             )
             .map_err(|error| tav_err("snapshot_refs", error))
+    }
+
+    fn insert_table_version_on(
+        conn: &rusqlite::Connection,
+        asset_id: &str,
+        version: i32,
+        parent_version: Option<i32>,
+        snapshot_id: &str,
+        manifest_id: &str,
+        now: &str,
+    ) -> Result<(), CoreError> {
+        conn.execute(
+            r#"
+            INSERT INTO table_asset_versions (
+                asset_id, version, snapshot_id, manifest_id, parent_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+            rusqlite::params![
+                asset_id,
+                version,
+                snapshot_id,
+                manifest_id,
+                parent_version,
+                now,
+            ],
+        )
+        .map_err(|error| {
+            let text = error.to_string();
+            if text.contains("UNIQUE") || text.contains("unique") {
+                tav_err(
+                    "insert_version",
+                    format!("资产 {asset_id} 已有版本 {version}，不能重复提交"),
+                )
+            } else {
+                tav_err("insert_version", error)
+            }
+        })?;
+        Ok(())
     }
 
     fn ensure_table_manifest_on(
@@ -637,7 +850,7 @@ mod tests {
             scope: "project".to_string(),
         };
         store
-            .insert_table_archive_with_event(input, "res_seed", None)
+            .insert_archive(input)
             .await
             .expect("seed asset")
             .id

@@ -190,9 +190,9 @@ pub(super) fn collect_analysis_tables(project: Option<&project::ui::OpenProject>
     analysis_tables_of(&engine::persistence::project_db::ProjectDatabaseManager::analysis_db_path(&root))
 }
 
-/// 从一台分析库（DuckDB 文件）里读 `main` schema 的表名（只读，失败一律空）。
+/// 从一台分析库（DuckDB 文件）里读 `main` 与归档 `rds_archive` 的表名（只读，失败一律空）。
 ///
-/// 抽成纯路径函数，便于用「造一台库」的方式钉住行为（不依赖打开项目的重对象）。
+/// 归档后的表资产只存在于 `rds_archive`；漏掉这一段会让每个表型资产都被误判失效。
 pub(crate) fn analysis_tables_of(path: &std::path::Path) -> Vec<String> {
     let Ok(config) = duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly) else {
         return Vec::new();
@@ -201,7 +201,8 @@ pub(crate) fn analysis_tables_of(path: &std::path::Path) -> Vec<String> {
         return Vec::new();
     };
     let mut stmt = match conn.prepare(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' ORDER BY 1",
+        "SELECT table_name FROM information_schema.tables \
+         WHERE table_schema IN ('main', 'rds_archive') ORDER BY 1",
     ) {
         Ok(stmt) => stmt,
         Err(_) => return Vec::new(),
