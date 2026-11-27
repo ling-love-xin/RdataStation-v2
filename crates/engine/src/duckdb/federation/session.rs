@@ -1031,8 +1031,9 @@ mod tests {
         set_bases(Vec::new());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!with_bases.is_empty());
-        // 清空后指纹就是空串：它是「无底座」的稳定标识，不是缺失值。
-        assert!(without_bases.is_empty(), "{without_bases:?}");
+        // 清空后指纹是 `-`：它是「无底座」的确定标识；返回空串会和「还没算过 / 算失败」混同，
+        // 所以 `bases_fingerprint` 空底座时明确返回 `-`（见该函数内注释）。
+        assert_eq!(without_bases, "-");
     }
 
     /// 两个源跨源 join：未限定名走主源，限定名走各自
