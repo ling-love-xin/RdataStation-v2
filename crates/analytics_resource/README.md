@@ -107,13 +107,14 @@
 
 全局侧按版本铺表：每次升级落一张**新表** `res_<描述>_<yyyymmddHHMMSS>`，历史版本的表**不删**——
 「回到 v3 看数据」才有东西可看。登记行的 `name` 仍是资产名（列表 / 筛选 / 同名链版本号都靠它），
-表名单独记在 `analytics_table` 列（[`global/table_name.rs`](src/global/table_name.rs)）：
+表名单独记在 `analytics_table` 列（升级侧在 [`global/promote.rs`](src/global/promote.rs)，表快照链在
+[`global/table_asset.rs`](src/global/table_asset.rs)）：
 
 | 场景 | 表名从哪来 |
 | --- | --- |
 | 新升级 | `res_<slug>_<时间戳>`；同一秒撞名时追加 `_v<版本>` |
 | 读取（分发 / 打开 / 统计） | 一律按登记行 `analytics_table` 反查 |
-| 迁移 036 之前的老行 | `analytics_table = name`（那时表名就等于资产名），读取面另有 `name` 回退 |
+| 迁移 `global/034` 之前的老行 | `analytics_table = name`（那时表名就等于资产名），读取面另有 `name` 回退 |
 
 项目侧的 `res_` 持久表名走同一条口径（**保留中文**，`engine` 的
 `sanitize_persistent_description`）：临时表名那把 ASCII 尺子只留给 `tmp_q_` / `tmp_i_`
@@ -140,7 +141,8 @@
 全局文件的历史链由 `global/file.rs::global_file_versions` 按全局名聚合 `file_asset_versions`
 （文件每升一版都新建一条 resource 行，`resource_id` 不是稳定链键），刷新后随
 `present::DetailExtras.file_versions` 进详情时间线（最近 3 条，`content_pruned` 标记是否还能恢复）；
-全局表仍走 `table_asset_versions`。全局侧只在详情时间线收敛入口，没有独立版本历史对话框。
+全局表仍走 `table_asset_versions`。项目侧与全局侧都有独立版本历史对话框：全局 scope 只允许
+对比与「恢复为当前版本」，取回 / 分析 / 固化仍只在项目实例里进行。
 
 **全局引用（2026-11-27）**：项目侧不再只能“分发复制一份”，也可以只记一条
 `kind='table_ref'` + `origin_kind='global'` 的引用资产，按稳定 `global_asset_id + version`
@@ -177,7 +179,7 @@ pin 全局版本（`global/refs.rs`、迁移 `global/038_analytics_global_refs.s
 | `src/service/` | 编排：`archive.rs`（首次 / 再归档）、`checkout.rs`（取回 / 还原）、`trash.rs`、`semantics.rs`（断言 / 效力门面）、`mod.rs`（标签 / 分组 / 履历埋点） |
 | `src/jobs/` | 后台作业：`mod.rs`（通道 + `catch_unwind` + pending 守恒）、`archive/`、`version.rs`、`index.rs`、`refresh.rs`（快照 + 主动校验 + 暂存重放）、`global.rs`、`rename.rs`、`trash.rs` |
 | `src/indexer/` | 三类孤儿扫描与人工确认修复（`scan.rs` / `repair.rs`） |
-| `src/global/` | 全局实例双库：`register` / `list` / `promote` / `distribute` / `sql` / `table_name`（一版一张表的表名） |
+| `src/global/` | 全局实例双库：`register` / `list` / `promote`（含表名生成）/ `distribute` / `sql` / `table_asset`（表快照链）/ `file`（CAS 文件链）/ `refs` / `delete` |
 | `src/present/` · `src/view_model/` | 纯函数呈现层与视图快照（零 I/O 零 GPUI） |
 | `src/resource_view/` · `src/detail_view/` · `src/dialogs/` · `src/resource_host/` | 面板 / 详情 / 对话框 / 宿主动作适配 |
 | `src/filter/` · `src/analysis.rs` · `src/preview.rs` · `src/dnd/` · `src/ui.rs` | 筛选数据层 / 分析表指纹 / 预览 / 拖拽 / 尺寸常量 |
@@ -221,7 +223,7 @@ pin 全局版本（`global/refs.rs`、迁移 `global/038_analytics_global_refs.s
 | **产品语义层**【2026-11-12 五批】业务断言（选填，指标名 / 口径定义 / 业务时间窗 / 结论摘要）+ `semantic_hash` 与 `content_hash` 并列 + 效力四态（候选 / 正式 / 废弃 / 被取代，与物理完整性**正交**）+ 语义搜索 + 详情「业务口径」分区与效力条 + 主动校验（时间窗过期去重）+ 谱系 `archive_refs` | L5 治理度量（引用计数 / 认证率）属运营层、待产品定义；**取回→再归档回连已打通**（迁移 030），表单不预填但口径按 `resource_id` 保留 |
 | **版本时间线**【2026-11-12】`analytics_resource_events` 落库 13 类事件；归档 / 再归档 / 取回 / 还原 / 撤销 / 口径变更 / 效力变更 / 谱系按时间合并展示；事件与索引同事务 | —（365 天保留期已落地；现共 13 类事件，含「取回后再归档 · 升版」回溯节点） |
 | **作业通道与写入可靠性**【2026-11-12】`spawn` / `Runtime::new` 失败打日志、worker 每个 Job `catch_unwind`、`JobSender::send` 失败归还 pending 并写失败回执；登记 / 快照 / 索引 / 事件同事务；本体 staging 原子替换 | —（staging 刷新时幂等重放已落地）；进程崩溃到下次打开之间仍有窗口，刻意留人工确认、不静默覆盖 |
-| **归档 / 取回 / 再归档闭环**【Phase 0 + 2026-10-13 第一刀】`ArchiveService`：本体 copy（默认，草稿保留为工作副本）+ 登记 + 指纹版本 + 事件；索引失败回滚副本；取回产出可写工作副本；**File 档两档粒度已落**：`PayloadMode`（copy / reference）+ 迁移 023 + `copy_in`/`resolve_source`/`copy_out_source` + 服务层按模式分派（归档 / 再归档 / 取回 / 撤销）；reference 的 UI 入口与打开校验留后续刀 | reference 的历史版本还原仍拒绝（走「取回该版本」）；**取回 → 改 → 回原档升 vN+1 已打通**（030 取回凭据） |
+| **归档 / 取回 / 再归档闭环**【Phase 0 + 2026-10-13 第一刀】`ArchiveService`：本体 copy（默认，草稿保留为工作副本）+ 登记 + 指纹版本 + 事件；索引失败回滚副本；取回产出可写工作副本；**File 档两档粒度已落**：`PayloadMode`（copy / reference）+ 迁移 023 + `copy_in`/`resolve_source`/`copy_out_source` + 服务层按模式分派（归档 / 再归档 / 取回 / 撤销）；reference 的归档入口、打开校验与详情文案均已接 | reference 的历史版本还原仍拒绝（走「取回该版本」）；**取回 → 改 → 回原档升 vN+1 已打通**（030 取回凭据） |
 | **索引修复**【Phase 0 + Phase 3 第二刀 + P0.8】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；**对话框已接**（`dialogs/index_repair.rs` + `present::build_repair_rows` + 宿主接线）：三分组、行内动作（补登固定文件型 / **从回收站还原**（按原相对路径找条目）/ 删记录走确认 / 接受当前内容 / 打开版本历史），修完自动重扫换行 | 按目录批量补登（后续刀） |
 | **版本历史**【Phase 3 第一刀】`dialogs/version` + `present::build_version_rows` + 宿主接线：当前版本与历史行同列（无 manifest 的行标不可还原）；**行本体走 `list::ListItem`**（hover / 选中由组件承担，不再手搓）；**还原 = 生成新版本**（不原地回滚）、**取回该版本为草稿**；「删除内容副本」已随旧副本方案删除；**任意两版对比**：Shift+点一行设基准，按版本号排旧→新；表型资产同样可对比（`table_asset/diff.rs` 给 schema 列变化 + 有界行级差异，文件仍走文本 diff）；动作后宿主换行，不关窗 | 按版本 / 时间 / 来源过滤检索（后续刀）；二进制元信息对比未做；行级 diff 对超大表未加超时 / 采样阈值 |
 | **文件资产删除**【2026-11-27 修订】`service/unlock.rs` + `global/unlock.rs` 与对应作业/宿主动作已删除；删除入口只走统一回收站：`trash_one` / `trash_global` 软删登记 + 本体搬进 `.RSmeta/trash` / `data/trash/global`，还原后本体回位。项目/全局列表与详情危险区都只提供「移入回收站」 | 草稿箱扫描联动（当前靠扫描发现新文件） |
@@ -239,7 +241,7 @@ pin 全局版本（`global/refs.rs`、迁移 `global/038_analytics_global_refs.s
 | **默认排序 + 分组折叠记忆**【P2.4】`resources.default_sort`（面板里点排序即写回；“默认排序” = 上次用的那个）与 `resources.collapsed_groups`（折叠态，按项目分桶）；两者都是构造期注入 + 用户动作写回（注入不写，避免回声） | —（默认分组已落地；设置架构 §14 Q7 的历史待确认项已关闭） |
 | 回收站语义（项目级一套 + `origin` 归属；软删登记行保归属，永久删除连关联一起清） | 回收站自动清理策略（按时间 / 容量，后续刀） |
 | 迁移 020 + 新列接入（写入 + 读取 + 按本体路径查重） | `kind` 过滤的**存储层**入口（面板已能按 kind 筛可见行，SQL 未接，后续刀） |
-| **全局一版一张表**【刀 4 + 2026-11-25】`global/table_name.rs`：升级落 `res_<描述>_<时间戳>`、旧版表保留；`analytics_table` 记实际表名（迁移 `global/036` 给老行回填成资产名，读取面另有 `name` 回退）；升级冲突只剩登记层，覆盖只软删登记；全局表型行打开走 `SampleSource::on_global`；**全局实例删除已落**（`global/delete.rs` + 详情危险区 + 列表右键「从全局实例删除…」，见下） | — |
+| **全局一版一张表**【刀 4 + 2026-11-25】表名生成在 `global/promote.rs`：升级落 `res_<描述>_<时间戳>`、旧版表保留；`analytics_table` 记实际表名（迁移 `global/034` 给老行回填成资产名，读取面另有 `name` 回退）；升级冲突只剩登记层，覆盖只软删登记；全局表型行打开走 `SampleSource::on_global`；**全局实例删除已落**（`global/delete.rs` + 详情危险区 + 列表右键「从全局实例删除…」，见下） | — |
 | **表型 `KeepVersions`**【刀 6】`prune_version_tables`：升级成功后按设置里的保留策略裁掉更早版本的**表**；当前版本那张是「本体」永远留，`keep` 数历史份数（`MetadataOnly` 只留当前一张）；**登记行与版本快照一条不删**；内容被清的那版分发时报「已被保留策略清理」而不是 DuckDB Catalog Error；裁剪失败只记日志，不回滚升级 | — |
 | **表型动作判据 + 回收站闭环**【2026-11-25】`ActionContext` 增 `has_table`，「有本体」= 文件或分析库表：打开 / 升级 / 详情删除走 `has_body`，取回只认文件本体（表型置灰并给「去 SQL 里改数据」提示）；回收站 `tbl:` 条目只软删登记、分析库表保留，还原 / 永久删除按 `has_payload` 分派提示；**还原前只读挂载项目分析库预检表是否还在**，撞锁拿不到就不拦还原 | — |
 | **全局实例删除 → 回收站**【2026-11-26】`trash_global` 只软删当前活跃行、表与版本快照保留，manifest 落 `data/trash/global/`；`restore_global` 先校验表在再复活登记；`purge_global` 才逐张 `DROP` 同名各版表并清单 / 登记 / 分发回执；UI 动作改「移入全局回收站…」；**`delete_global` 旧硬删入口已撤**，全局删除只剩「移入 → 回收站永久删除」一条路 | 回收站 TTL；被 pin 跳过只在回执报数 |
@@ -249,9 +251,9 @@ pin 全局版本（`global/refs.rs`、迁移 `global/038_analytics_global_refs.s
 | **同名资产身份策略**【2026-11-27】**身份是 id，显示名在存活资产内唯一**。`archive_new` 在本体落盘前检查显示名占用（失败不消费草稿、不留半份文件）；`rename_resource` 为空名 / 同名存活资产拒绝；表归档 `asset_id=None` 时按名命中多条返回歧义、要求用 id 指定。没有数据库级唯一索引（存量同名行会令迁移失败），存量歧义显式报错而非静默选链 | 面板改名入口对同名冲突只给回执，未做行内实时校验 |
 | **文件 CAS GC 与跨介质补偿**【2026-11-27】`CasStore::gc` mark-sweep：按 `file_asset_versions` / 全局 manifest 引用保留 manifest 及全部 entry blob，超 24h grace 的孤儿 manifest / blob / staging 才删，解析失败一律保留；`jobs/file_gc.rs` 随表 GC 的小时节流跑项目 + 全局两侧。`global/distribute` 文件登记失败回删已物化文件，`global/promote` 登记失败回滚新建快照表，避免「文件 / 表在、资产不在」 | GC 只在后台节流触发，purge 后不会立即回收（24h grace 内保留） |
 | **项目文件任意两版对比**【2026-11-27】版本历史对话框 Shift+点一行设「对比基准」（再点取消），选中另一行后「与基准 vN 对比…」；两版由后端按版本号排成旧→新，旧侧 / 新侧都走 manifest 物化（新侧是当前版本时读本体）；同一版拒绝对比 | 行级 diff 对超大文件未加超时 / 采样阈值 |
-| **全局独立版本历史与对比**【2026-11-27】全局行也有版本历史入口：`VersionsJob` / `VersionDiffJob` 在项目库取不到该 id 时回退全局实例，`VersionRows.global` 标记来源；文件走 `file_asset_versions` 链、表走 `table_asset_versions` 链，任意两版对比（文件读 CAS manifest、表走 `table_version_diff`）。全局历史是**只读**：动作栏只留对比，还原 / 取回 / 固化仍在项目实例 | 全局历史暂不提供按版本 / 时间过滤；「取回到项目」仍走详情动作，不在历史对话框 |
-| **全局文件历史版本恢复**【2026-11-27】只认 manifest：`restore_file_version` 从历史 manifest 生成新 head（旧版行与 CAS 对象保留）；无 manifest 的旧版本直接拒绝恢复，旧 `resources/versions/<asset>/vN` 回退已删除。详情时间线读 `file_asset_versions` 最近 3 条，选中可还原版即「恢复为 vN+1」；完整历史另走版本对话框 | 从全局历史恢复仍需回项目详情操作 |
-| **全局表历史版本恢复**【2026-11-26】`restore_global_table_version(name, N)` 从快照取旧表名，校验旧表还在后 `CREATE TABLE rds_global.<新表> AS SELECT * FROM rds_global.<旧表>`，软删旧活跃行、登记新版本（版本号 +1）；旧表 / 旧登记 / 快照全留；旧表被裁或快照缺表名明确拒绝；文件型走 `restore_global_file_version`；详情时间线读 `table_asset_versions` 最近 3 条，选中可还原版即「恢复为 vN+1」；完整历史另走版本对话框 | 从全局历史恢复仍需回项目详情操作 |
+| **全局独立版本历史与对比**【2026-11-27】全局行也有版本历史入口：`VersionsJob` / `VersionDiffJob` 在项目库取不到该 id 时回退全局实例，`VersionRows.global` 标记来源；文件走 `file_asset_versions` 链、表走 `table_asset_versions` 链，任意两版对比（文件读 CAS manifest、表走 `table_version_diff`）。全局 scope 可「恢复为当前版本」（按表 / 文件路由到 `restore_global_table_version` / `restore_global_file_version`，旧版保留）；取回 / 分析 / 固化仍只在项目实例 | 全局历史暂不提供按版本 / 时间过滤；「取回到项目」仍走详情动作，不在历史对话框 |
+| **全局文件历史版本恢复**【2026-11-27】只认 manifest：`restore_file_version` 从历史 manifest 生成新 head（旧版行与 CAS 对象保留）；无 manifest 的旧版本直接拒绝恢复，旧 `resources/versions/<asset>/vN` 回退已删除。详情时间线读 `file_asset_versions` 最近 3 条，选中可还原版即「恢复为 vN+1」；完整历史与恢复在版本对话框 | 详情只列最近 3 条；版本对话框承担完整历史 |
+| **全局表历史版本恢复**【2026-11-26】`restore_global_table_version(name, N)` 从快照取旧表名，校验旧表还在后 `CREATE TABLE rds_global.<新表> AS SELECT * FROM rds_global.<旧表>`，软删旧活跃行、登记新版本（版本号 +1）；旧表 / 旧登记 / 快照全留；旧表被裁或快照缺表名明确拒绝；文件型走 `restore_global_file_version`；详情时间线读 `table_asset_versions` 最近 3 条，选中可还原版即「恢复为 vN+1」；完整历史与恢复在版本对话框 | 详情只列最近 3 条；版本对话框承担完整历史 |
 | **来源链浏览 + 分发谱系**【刀 3 + 2026-11-25】`origin_kind` + `origin_ref` 记**直接上游**那一跳（全局行 `project` + 资源 id/版本；项目行 `global` + 实例/版本），详情「来源」区多一行「上游」；详情动作区「查看来源链…」按 id 在面板快照里逐跳往上追（最多 8 跳、防环；上游不在快照时如实灰显并注明可能已删除或在别的项目）；分发成功后补记 `derived_from`（项目产物 → 全局上游，失败只告警不回滚分发） | 升级路径尚无 `derived_from`（产物落在全局库，项目侧没有对应行可挂） |
 | **表型升级**【刀 5c + 2026-11-26】本体是项目分析库里一张表的存档也能升级：所有权收口后项目库与全局库同根，项目会话直接 `CREATE TABLE rds_global.<版本表> AS SELECT * FROM analytics.<源表>`；冲突 / 覆盖 / 版本号 / 登记 / 裁剪与文件型升级同口径；不再导出 parquet、不再先锁进程单例 | — |
 | **数据对象面板的单一升级路径**【刀 7 / 刀 12】场景 3 在面板里闭环：会话表（结果集 / 洞察产物）→「存为表」（整表搬进项目库，成功顺手重取面板清单）。面板上**只有这一条升级路径**——「升级」的唯一含义是临时对象 → 项目持久表；全局升级入口在资产库：详情动作区与列表右键「升级到全局…」（`detail_actions::request_promote_to_global`），刀 12 撤掉了面板里那个第二个入口（同一动作两处语义会互相打脸） | 面板不再提供全局升级；文件型与表型资产都走资产库那两条入口 |

@@ -173,9 +173,11 @@ pub fn can_delete_global(ctx: &ActionContext) -> bool {
     !ctx.project() && ctx.single()
 }
 
-/// 移入回收站（列表 / 多选）：项目行都可以——本体缺失的行也能删，那正是清理脏登记的手段。
+/// 移入回收站（列表 / 多选）：项目行、项目非只读；本体缺失的文件型不给入口
+/// （服务层对“没有文件路径 / 本体不在”的 Copy 行会拒绝，列表不能给一个必失败的入口）。
+/// 表型的“本体”是分析库里的表，缺失时仍可只软删登记，所以 `has_table` 放行。
 pub fn can_delete_row(ctx: &ActionContext) -> bool {
-    ctx.project()
+    ctx.project() && !ctx.read_only && (ctx.status != ArchiveStatus::Missing || ctx.has_table)
 }
 
 /// 移入回收站（详情危险区）：比列表多两道——本体必须还在、项目非只读。
@@ -285,7 +287,30 @@ mod tests {
         assert!(!can_rename(&ctx), "本体缺失先走索引修复，改名只会掩盖问题");
         assert!(!can_open(&ctx));
         assert!(!can_delete_from_detail(&ctx), "详情要先走索引修复");
-        assert!(can_delete_row(&ctx), "列表删记录正是清理脏登记的手段");
+        assert!(
+            !can_delete_row(&ctx),
+            "文件型本体缺失时服务层会拒绝移入回收站，列表不能给必失败入口"
+        );
+    }
+
+    #[test]
+    fn read_only_project_hides_trash_entry() {
+        let mut ctx = ActionContext::project_row();
+        ctx.read_only = true;
+        assert!(
+            !can_delete_row(&ctx),
+            "宿主 request_delete 会拒绝只读项目，列表判据不能先给入口"
+        );
+    }
+
+    #[test]
+    fn missing_table_asset_can_still_be_trashed_as_registry_only() {
+        let mut ctx = ActionContext::project_table_row();
+        ctx.status = ArchiveStatus::Missing;
+        assert!(
+            can_delete_row(&ctx),
+            "表型缺失时服务层仍只软删登记：列表要保留清理入口"
+        );
     }
 
     #[test]
