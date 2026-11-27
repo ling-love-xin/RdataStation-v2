@@ -1565,6 +1565,9 @@ fn shared_fields_are_whitelisted() {
         // 侧栏面板的弱句柄（2026-11-24）：数据对象面板据它开资产版本历史
         // （版本对话框的取数与轮询泵都在侧栏面板手里）。只转发请求，不持状态。
         "sidebar_panel",
+        // 陈旧发布确认流（2026-11-28，资源发布守卫）：待确认的恢复请求由面板写入、
+        // 宿主 render 消费（`panels::ensure_stale_publish_dialog`），属宿主级共享状态。
+        "stale_publish_dialog",
         "tag_dialog",
         "trash_dialog",
         "version_dialog",

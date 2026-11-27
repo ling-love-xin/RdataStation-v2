@@ -117,6 +117,33 @@ pub struct MySqlNativeDatabase {
     min_connections: usize,
 }
 
+/// sqlx 词汇的 SSL 参数（`mysql` 驱动拼进 URL 的就是这一套）。
+///
+/// 内核把 `mysql` 这个名字解析到本驱动时，URL 里已经带着 `ssl-mode` / `ssl-ca` ……
+/// 而 `mysql_async::Opts::from_url` 遇到未知键**直接报错**（不是忽略），
+/// 于是「用 MySQL 官方实现 + 开了 SSL」会连不上。剥掉再解析，证书与校验语义由
+/// [`MySqlNativeDatabase::new_with_tls`] 的 `TlsRequest` 承担。
+fn strip_sqlx_ssl_params(url: &str) -> Option<String> {
+    const SQLX_ONLY: [&str; 4] = ["ssl-mode", "ssl-ca", "ssl-cert", "ssl-key"];
+    let (head, query) = url.split_once('?')?;
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|pair| {
+            let key = pair.split('=').next().unwrap_or_default();
+            !SQLX_ONLY.iter().any(|name| key.eq_ignore_ascii_case(name))
+        })
+        .filter(|pair| !pair.is_empty())
+        .collect();
+    if kept.len() == query.split('&').filter(|p| !p.is_empty()).count() {
+        return None; // 没有 sqlx 专属参数，别动原串
+    }
+    Some(if kept.is_empty() {
+        head.to_string()
+    } else {
+        format!("{head}?{}", kept.join("&"))
+    })
+}
+
 impl MySqlNativeDatabase {
     /// 从连接 URL 创建新的 MySQL 数据库实例
     pub async fn new(url: &str) -> Result<Self, CoreError> {
@@ -131,13 +158,29 @@ impl MySqlNativeDatabase {
         url: &str,
         tls: Option<&connection::config::TlsRequest>,
     ) -> Result<Self, CoreError> {
-        let opts = mysql_async::Opts::from_url(url).map_err(|e| {
-            CoreError::database(DatabaseError::Driver {
-                db_type: "mysql_native".to_string(),
-                operation: "parse_url".to_string(),
-                source: e.to_string(),
-            })
-        })?;
+        let opts = match mysql_async::Opts::from_url(url) {
+            Ok(opts) => opts,
+            Err(original) => {
+                // `mysql`（sqlx）词汇的 SSL 参数会原样带到这里：剥掉重试一次
+                let Some(cleaned) = strip_sqlx_ssl_params(url) else {
+                    return Err(CoreError::database(DatabaseError::Driver {
+                        db_type: "mysql_native".to_string(),
+                        operation: "parse_url".to_string(),
+                        source: original.to_string(),
+                    }));
+                };
+                tracing::warn!(
+                    "连接 URL 含 sqlx 专属 SSL 参数（ssl-mode / ssl-ca / ssl-cert / ssl-key），已剥离后解析；证书与校验走 TlsRequest"
+                );
+                mysql_async::Opts::from_url(&cleaned).map_err(|e| {
+                    CoreError::database(DatabaseError::Driver {
+                        db_type: "mysql_native".to_string(),
+                        operation: "parse_url".to_string(),
+                        source: e.to_string(),
+                    })
+                })?
+            }
+        };
         let mut builder = mysql_async::OptsBuilder::from_opts(opts);
         if let Some(req) = tls {
             builder = builder.ssl_opts(Some(mysql_async_ssl_opts(req)?));
@@ -1138,6 +1181,27 @@ mod tests {
     use crate::Database;
 
     const MYSQL_URL: &str = "mysql://root:root@localhost:3306/";
+
+    /// sqlx 词汇的 SSL 参数必须剥掉：`mysql_async` 遇到未知键直接报错（真机实证：
+    /// 连接对话框按 `mysql` 拼了 `ssl-mode`，内核把 `mysql` 解析到本驱动后连不上）。
+    #[test]
+    fn sqlx_ssl_params_are_stripped_before_parsing() {
+        let cleaned = strip_sqlx_ssl_params(
+            "mysql://h:3306/db?ssl-mode=REQUIRED&ssl-ca=/ca.pem&sslmode=x",
+        )
+        .expect("应剥掉 sqlx 专属参数");
+        assert_eq!(cleaned, "mysql://h:3306/db?sslmode=x");
+        assert_eq!(
+            strip_sqlx_ssl_params("mysql://h:3306/db?ssl-mode=DISABLED").as_deref(),
+            Some("mysql://h:3306/db"),
+            "只剥不认识的键，其余原样保留"
+        );
+        assert!(
+            strip_sqlx_ssl_params("mysql://h:3306/db?require_ssl=true").is_none(),
+            "本驱动自己的词汇不该被动"
+        );
+        assert!(strip_sqlx_ssl_params("mysql://h:3306/db").is_none());
+    }
 
     /// TLS 请求 → `SslOpts`（纯函数，无需真机）：CA 落到 root_certs，
     /// PKCS#12 落到 client_identity，PEM 两件套（native-tls 后端不支持）**报错不静默丢弃**。

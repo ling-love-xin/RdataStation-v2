@@ -368,8 +368,12 @@ fn project_side_save_registers_secret_to_project_analysis_db_and_delete_removes(
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 口径（2026-11-27 解耦 `use_duckdb_fed` 后）：Secret 注册**只按能力**——驱动有没有
+/// 对应 DuckDB 扩展（`has_federable_extension`），不再看「是否开启联邦加速」这个开关。
+/// 原用例名与断言（`save_without_federation_does_not_register_secret`）是按旧口径写的，
+/// 现已与实现相反：`postgres` 恒有 `postgres_scanner` 能力 → 保存必然注册一次。
 #[test]
-fn save_without_federation_does_not_register_secret() {
+fn save_registers_secret_by_capability_not_by_switch() {
     let dir = temp_dir("no-register");
     let service = make_service(&dir);
     let rt = runtime();
@@ -387,9 +391,10 @@ fn save_without_federation_does_not_register_secret() {
         Some(&secret_dir),
     )
     .expect("open secret db");
-    assert!(
-        mgr.list().expect("list").is_empty(),
-        "未开启联邦加速不应注册 Secret"
+    assert_eq!(
+        mgr.list().expect("list").len(),
+        1,
+        "postgres 有对应 DuckDB 扩展 → 保存应按能力注册一条 Secret（与联邦开关无关）"
     );
     drop(mgr);
 
