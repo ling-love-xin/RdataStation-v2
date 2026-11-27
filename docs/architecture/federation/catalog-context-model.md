@@ -192,7 +192,7 @@ struct SourceIntent { id, origin, alias, auto_attach: bool, primary: bool }
 | **K0b** ✅ | 面板读文件索引取代 `Shared.loaded_files`；该字段整条删除（不留兼容层）；指纹里删掉空的「洞察样本」维度 | 零（输出逐字不变） | `cargo check -p rds-workbench --lib/--tests` 通过；文件索引逐条清理（删视图即忘） |
 | **K1** ✅ | 抽取 `rds-sql::table_paths`（递归全树、CTE/派生表/表函数排除）+ 判定 `editor::exec::preflight`（不存在 / 多源歧义给候选 / 未知 catalog / 源不可用）；联邦与加速两档发送前过闸 | 报错更早更准 | 表驱动：`rds-sql` 9 条抽取 + `editor` 13 条判定（含主源优先、内置库不参与歧义） |
 | K2（已落两刀） | 面板改"源记录 + 可用性分段"，会话行并入。首刀：会话源带 `conn_id`，归属连接在清单里 → 并入连接行（含失败原话）；无归属会话行才兜底。次刀：源段按可用性分两段（`source_section` + rank 0–2 / 3），渲染插子标题 | 重复行消失；"可解析 / 可加入"在界面上分开 | 面板 50 条（含「同连接两文档 = 一行」「分段序不许插回」） |
-| K3（已落三刀） | 意图清单 replay + 主源持久化；引用计数拒绝 DETACH。① 别名冲突改拒绝（`MountRegistry::reserve` 报错并点名占用者，同源重挂幂等）；② 主源持久化（`analysis_primary` 单行表 + 036；`publish_project` 发布两张快照；`apply_registered_primary` 让登记主源赢过文档连接，会话重建即 replay）；③ 引用计数闸（`catalog_holders` + `holders_of` + `detach_refusal`；`unmount_conn(conn_id, acting)` 与 `file_view::detach_database_global` 双入口过闸） | 重启不丢主源；冲突从静默改名变报错；有人在用不许摘 | K3①：engine lib 355 passed；K3②：store 13 条 / editor 组装 18 条全过；K3③：engine lib **356 passed**（含 `holders_count_only…` 与「面板卸被拒 / 自己的会话发起放行」两段），workbench lib 225 passed，`cargo check -p rds-workbench --lib --tests` 通过。待做：headless probe（restart 后 catalog 与 primary 恢复） |
+| K3（已落四刀） | 意图清单 replay + 主源持久化；引用计数拒绝 DETACH。① 别名冲突改拒绝（`MountRegistry::reserve` 报错并点名占用者，同源重挂幂等）；② 主源持久化（`analysis_primary` 单行表 + 036；`publish_project` 发布两张快照；`apply_registered_primary` 让登记主源赢过文档连接，会话重建即 replay）；③ 引用计数闸（`catalog_holders` + `holders_of` + `detach_refusal`；`unmount_conn(conn_id, acting)` 与 `file_view::detach_database_global` 双入口过闸）；④ headless 重启探针（`crates/engine/tests/analysis_restart_probe.rs`：`clear_project()` 模拟进程退出 → `publish_project` 重建 → 按登记行挂载，断言别名清单 / 主源 / 表清单三处回位） | 重启不丢主源；冲突从静默改名变报错；有人在用不许摘；重启后意图可 replay | K3①：engine lib 355 passed；K3②：store 13 条 / editor 组装 18 条全过；K3③：engine lib **356 passed**（含 `holders_count_only…` 与「面板卸被拒 / 自己的会话发起放行」两段），workbench lib 225 passed，`cargo check -p rds-workbench --lib --tests` 通过；K3④：`cargo test -p rds-engine --test analysis_restart_probe` 1 passed（0.38s） |
 
 K0a 是唯一前置，且行为零变化，可先合。
 
@@ -230,3 +230,7 @@ K0a 是唯一前置，且行为零变化，可先合。
 - 2026-11-27：K3 第三刀（引用计数拒绝 DETACH）：`catalog_holders` / `holders_of` / `detach_refusal`
   + `unmount_conn(conn_id, acting)` 语义分层 + `file_view::detach_database_global` 同一道闸；
   既有测试 `unmounting_a_primary_source_falls_back_to_memory` 改成两段（面板卸被拒 / 自己的会话放行）。
+- 2026-11-27：K3 第四刀（headless 重启探针）：`crates/engine/tests/analysis_restart_probe.rs`
+  用 `clear_project()` 模拟进程退出、`publish_project` 重建，断言登记行 / 主源 / 表清单三处回位。
+  探针的挂载动作是**代理**（真实产品由文档组装 plan 触发；文件库实际走 `file_view`），
+  验的是"事实面可由意图清单重建"这一条，不是 GUI 行为。
