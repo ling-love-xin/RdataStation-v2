@@ -163,7 +163,7 @@ struct SourceIntent { id, origin, alias, auto_attach: bool, primary: bool }
 | **K0b** ✅ | 面板读文件索引取代 `Shared.loaded_files`；该字段整条删除（不留兼容层）；指纹里删掉空的「洞察样本」维度 | 零（输出逐字不变） | `cargo check -p rds-workbench --lib/--tests` 通过；文件索引逐条清理（删视图即忘） |
 | **K1** ✅ | 抽取 `rds-sql::table_paths`（递归全树、CTE/派生表/表函数排除）+ 判定 `editor::exec::preflight`（不存在 / 多源歧义给候选 / 未知 catalog / 源不可用）；联邦与加速两档发送前过闸 | 报错更早更准 | 表驱动：`rds-sql` 9 条抽取 + `editor` 13 条判定（含主源优先、内置库不参与歧义） |
 | K2（进行中） | 面板改"源记录 + 可用性分段"，会话行并入。首刀：会话源带 `conn_id`，归属连接在清单里 → 并入连接行（含失败原话）；无归属会话行才兜底 | 重复行消失（已有性质测试「同连接两文档 = 一行」） | 待做：两段分组（可解析 / 意向未生效 / 可加入） |
-| K3 | 意图清单 replay + 主源持久化；`_2` 改拒绝；引用计数拒绝 DETACH | 重启不丢主源；冲突从静默改名变报错 | headless probe：restart 后 catalog 与 primary 恢复 |
+| K3（进行中） | 意图清单 replay + 主源持久化；引用计数拒绝 DETACH。**别名冲突已改拒绝** ✅（2026-11-27：`MountRegistry::reserve` 冲突报错并点名占用者，同源重挂幂等） | 重启不丢主源；冲突从静默改名变报错 | 待做：headless probe：restart 后 catalog 与 primary 恢复 |
 
 K0a 是唯一前置，且行为零变化，可先合。
 
@@ -174,7 +174,7 @@ K0a 是唯一前置，且行为零变化，可先合。
 | 存量 | 处理 |
 |---|---|
 | `panels/shared.rs` 的 `loaded_files`（UI 进程内存） | K0b 已整条删除；读侧走 `file_view::file_entries()`（视图与 catalog 两类） |
-| `instance.rs::MountRegistry::reserve` 的 `_2` 兜底 | K3 删，改拒绝（与联邦路径 `alias_owner` 同口径） |
+| `instance.rs::MountRegistry::reserve` 的 `_2` 兜底 | **已删（2026-11-27）**：冲突即报错并点名占用者；同一条源重复申请幂等（与联邦路径 `alias_owner` 同口径） |
 | `mounted_sources()` / `mounted_conns()` | 保留为内部事实源，外部只读 `catalog::snapshot()` |
 | `analysis_sources`（项目库登记行） | 直接充当 §5 的意图清单；字段按 `SourceIntent` 收敛 |
 | 面板 `Object::rank()` 按身份类型分档 | K2 换成"可用性"维度：可解析 → 意向未生效 → 可加入 |
