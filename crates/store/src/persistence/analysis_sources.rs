@@ -23,7 +23,7 @@ use std::sync::RwLock;
 
 use shared::error::{CoreError, StorageError};
 
-/// 连接 id → 登记别名 的**进程级快照**（宿主在清单刷新时发布，执行侧读取）。
+/// 连接 id → （登记别名, 挂载档） 的**进程级快照**（宿主在清单刷新时发布，执行侧读取）。
 ///
 /// 为什么要有这一份：联邦计划的组装在**工作线程**上（`FederatedSourcePort::records`，
 /// 不持 `Shared`、拿不到项目根），而登记表在项目库里。让执行侧每次去开项目库是错的
@@ -31,10 +31,13 @@ use shared::error::{CoreError, StorageError};
 /// 顺带发布一份只读快照（几十条，复制一次比每次查库便宜）。
 ///
 /// 语义：**只是缓存**，权威仍是项目库；发布点必须跟着 [`list_in_project`] 走。
-static ALIASES_BY_CONN: std::sync::LazyLock<RwLock<HashMap<String, String>>> =
+///
+/// 带档位（2026-11-27，`use_duckdb_fed` 解耦）：渠道门控要回答"这条连接是不是被登记成
+/// 本地加速源"，只存别名答不了。档位是登记行的一部分，跟着别名一起发布才不会有第二处来源。
+static ALIASES_BY_CONN: std::sync::LazyLock<RwLock<HashMap<String, (String, AnalysisMountKind)>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
-/// 发布「连接 id → 别名」快照（清空后重填：切项目必须整体换掉，不能留上个项目的键）。
+/// 发布「连接 id → (别名, 档)」快照（清空后重填：切项目必须整体换掉，不能留上个项目的键）。
 pub fn publish_aliases(rows: &[AnalysisSourceRow]) {
     let mut map = ALIASES_BY_CONN
         .write()
@@ -42,7 +45,10 @@ pub fn publish_aliases(rows: &[AnalysisSourceRow]) {
     map.clear();
     for row in rows {
         if let Some(conn_id) = row.connection_id.as_deref() {
-            map.insert(conn_id.to_string(), row.alias.clone());
+            map.insert(
+                conn_id.to_string(),
+                (row.alias.clone(), row.mount_kind),
+            );
         }
     }
 }
@@ -56,7 +62,20 @@ pub fn alias_for_connection(conn_id: &str) -> Option<String> {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(conn_id)
-        .cloned()
+        .map(|(alias, _)| alias.clone())
+}
+
+/// 某条连接在项目里登记成哪一档（没有登记 → `None`）。
+///
+/// 渠道门控的唯一判据（2026-11-27 起不再看连接上的 `use_duckdb_fed`）：
+/// 「本地加速」= 登记成 [`AnalysisMountKind::Accel`]；「联邦」= 登记成
+/// `Federation` / `AttachFile` 或本文档绑定（能力另由驱动常量判）。
+pub fn mount_kind_for_connection(conn_id: &str) -> Option<AnalysisMountKind> {
+    ALIASES_BY_CONN
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(conn_id)
+        .map(|(_, kind)| *kind)
 }
 
 /// 这条连接在**当前项目**里有没有登记（= 快照里有别名）。
@@ -576,6 +595,35 @@ mod tests {
             created_at: "2026-11-25T00:00:00Z".to_string(),
             updated_at: "2026-11-25T00:00:00Z".to_string(),
         }
+    }
+
+    /// 快照带档位（2026-11-27 `use_duckdb_fed` 解耦）：渠道门控要能问出「这条连接在
+    /// 项目里登记成哪一档」，只存别名答不了；档位必须跟别名同源发布，不许第二处维护。
+    #[test]
+    fn alias_snapshot_carries_mount_kind() {
+        let mut fed = row("s_1", "shop_src");
+        fed.connection_id = Some("C_fed".to_string());
+        fed.mount_kind = AnalysisMountKind::Federation;
+        let mut accel = row("s_2", "rds_src");
+        accel.connection_id = Some("C_accel".to_string());
+        accel.mount_kind = AnalysisMountKind::Accel;
+        publish_aliases(&[fed, accel]);
+
+        assert_eq!(alias_for_connection("C_fed").as_deref(), Some("shop_src"));
+        assert_eq!(
+            mount_kind_for_connection("C_fed"),
+            Some(AnalysisMountKind::Federation),
+            "联邦档要读得回来"
+        );
+        assert_eq!(
+            mount_kind_for_connection("C_accel"),
+            Some(AnalysisMountKind::Accel),
+            "加速档要读得回来"
+        );
+        assert_eq!(alias_for_connection("C_other"), None, "未登记就是没有");
+        assert_eq!(mount_kind_for_connection("C_other"), None);
+
+        publish_aliases(&[]); // 快照是进程级静态，别留给后面的测试
     }
 
     #[test]
