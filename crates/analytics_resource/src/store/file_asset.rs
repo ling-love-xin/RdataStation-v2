@@ -146,6 +146,38 @@ impl AnalyticsResourceStore {
             .map_err(|error| lease_err("active", error))
     }
 
+    /// 一次取出所有 active 租约：刷新快照时按资源 id 建映射，避免详情区逐行 N+1。
+    ///
+    /// 同一资产同 scope 至多一条（唯一索引），所以这里直接按资源 id 收成映射；
+    /// 历史 / 已消费 / 已放弃的租约留在表里做审计，不出现在这份结果里。
+    pub async fn active_leases(
+        &self,
+    ) -> Result<std::collections::HashMap<String, CheckoutLease>, CoreError> {
+        let conn = self.get_conn().await?;
+        let mut stmt = conn
+            .inner()?
+            .prepare(
+                r#"
+                SELECT lease_id, resource_id, base_scope, base_version, dest_rel,
+                       state, created_at, closed_at, consumed_version
+                FROM checkout_leases
+                WHERE state = 'active'
+                ORDER BY created_at DESC
+                "#,
+            )
+            .map_err(|error| lease_err("active_list_prepare", error))?;
+        let rows = stmt
+            .query_map([], map_lease)
+            .map_err(|error| lease_err("active_list_query", error))?;
+        let mut leases = std::collections::HashMap::new();
+        for row in rows {
+            let lease = row.map_err(|error| lease_err("active_list_collect", error))?;
+            // 同 id 只保留最新一条（理论上不会有第二条，唯一索引已经挡住）。
+            leases.entry(lease.resource_id.clone()).or_insert(lease);
+        }
+        Ok(leases)
+    }
+
     /// 按工作副本相对路径反查 active 租约（再归档时确认 base）。
     pub async fn lease_by_dest(
         &self,

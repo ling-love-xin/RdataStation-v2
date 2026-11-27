@@ -514,7 +514,7 @@ purge_file(asset_id) -> ()
 | 版本元数据 | `store/migrations/project_meta/036_file_asset_cas.sql`、`store/migrations/global/040_global_file_asset_cas.sql`、`store/file_asset.rs` | 项目库 + 全局库均已实现 |
 | 归档消费草稿 | `service/archive.rs::archive_new` / `archive_into_existing` | 已实现（草稿删除失败只记 note） |
 | 字节哈希 vs 结构哈希 | `service/archive.rs`、`analysis.rs` | 已实现：`ArchiveKind::File` 一律字节 sha256，结构只作元数据 |
-| checkout lease | `service/checkout.rs`、`store/file_asset.rs`、`jobs/archive/run.rs` | 已实现（项目侧；receipt 仅兼容保留） |
+| checkout lease | `service/checkout.rs`、`store/file_asset.rs`、`jobs/archive/run.rs`、`detail_view/rows.rs`、`dialogs/checkout.rs` | 已实现（项目侧；receipt 仅兼容保留）；刷新快照一次取全量 active 租约，详情与取回对话框显示草稿落点 / 基准版本 |
 | 再归档冲突 | `service/archive.rs::archive_into_existing`、`jobs/archive/run.rs::run_archive` | 已实现 base 校验 / lease 消费；全局 fork 已实现，项目侧 fork 未做 |
 | 任意两版对比 | `jobs/version.rs::load_version_diff`、`dialogs/version.rs`、`dialogs/version_diff.rs` | 文本两版已实现（Shift+点选基准，按版本号排旧→新，两侧走 manifest）；表格 schema/行 diff、二进制元信息对比未实现 |
 | 全局 file-first | `global/file.rs::publish_file`、`global/distribute.rs`、`global/promote.rs`、`global/delete.rs`、`jobs/global.rs::promote_file_first` | 已实现（M4）：文件行 `kind=file`、`analytics_table=NULL`；旧 `analysis + file` 混合行迁移留 M5 |

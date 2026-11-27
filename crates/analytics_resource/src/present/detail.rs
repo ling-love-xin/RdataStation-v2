@@ -126,6 +126,8 @@ pub fn to_detail(
         // 内容预览（原型 §3.1）：宿主读完推来，装配层只负责搬（缺项 = 仅元信息）。
         preview: extras.preview,
         dispatch_label: extras.dispatch_label,
+        // 活跃取回由刷新作业拿到租约后回填（装配层本身不查库）。
+        checkout_label: None,
     }
 }
 

@@ -109,6 +109,7 @@ fn checkout_seed() -> CheckoutDialogSeed {
         file_name: suggest_work_copy_name("月报", Some("sql")),
         target_dir_label: "D:\\proj\\scratchpad".to_string(),
         version: 3,
+        active_checkout: None,
     }
 }
 
@@ -305,6 +306,25 @@ fn archive_dialog_with_target_conflict_renders(cx: &mut TestAppContext) {
 
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
     assert!(cx.debug_bounds("archive-dialog-ok").is_some());
+}
+
+#[gpui_kit::test]
+fn checkout_dialog_warns_when_a_draft_is_already_out(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let cx = harness(cx);
+    let mut seed = checkout_seed();
+    seed.active_checkout = Some("已取回：草稿箱/月报（工作副本）.sql（基准 v3）".to_string());
+    let inputs = cx.update(|window, cx| build_checkout_inputs(window, cx, &seed));
+    cx.update(|window, cx| {
+        open_checkout_dialog_with(window, cx, seed, inputs, |_, _| {});
+    });
+    draw(cx);
+
+    assert!(
+        cx.debug_bounds("checkout-dialog-active-lease").is_some(),
+        "已有活跃取回时，对话框要在动手前把草稿位置说清"
+    );
+    assert!(cx.debug_bounds("checkout-dialog-ok").is_some());
 }
 
 #[gpui_kit::test]

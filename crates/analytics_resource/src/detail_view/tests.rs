@@ -42,6 +42,7 @@ fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         // 预览缺省 = 仅元信息（各用例需要时用结构体更新语法盖掉）。
         preview: crate::preview::Preview::default(),
         dispatch_label: String::new(),
+        checkout_label: None,
     }
 }
 
@@ -77,6 +78,32 @@ fn dispatch_row_appears_only_when_the_global_has_been_used() {
     assert!(
         !detail_rows(&project)[0].1.iter().any(|(label, _)| *label == "使用"),
         "项目行不该有「使用」行"
+    );
+}
+
+#[test]
+fn checkout_row_appears_only_when_a_draft_is_out() {
+    let mut checked_out = detail(ArchiveStatus::Normal, ArchiveKind::File);
+    checked_out.checkout_label =
+        Some("已取回：草稿箱/月报（工作副本）.sql（基准 v3）".to_string());
+
+    let rows = detail_rows(&checked_out);
+    let checkout = rows[0]
+        .1
+        .iter()
+        .find(|(label, _)| *label == "取回")
+        .map(|(_, value)| value.as_str());
+    assert_eq!(
+        checkout,
+        Some("已取回：草稿箱/月报（工作副本）.sql（基准 v3）"),
+        "活跃取回要摆出草稿位置与基准版本"
+    );
+
+    // 没有活跃取回时不产生这一行（不写“未取回”占地方）。
+    let idle = detail(ArchiveStatus::Normal, ArchiveKind::File);
+    assert!(
+        !detail_rows(&idle)[0].1.iter().any(|(label, _)| *label == "取回"),
+        "没有活跃取回就不该有「取回」行"
     );
 }
 

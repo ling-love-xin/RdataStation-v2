@@ -168,6 +168,7 @@ mod tests {
             tags: Vec::new(),
             preview: crate::preview::Preview::default(),
             dispatch_label: String::new(),
+            checkout_label: None,
         }
     }
 

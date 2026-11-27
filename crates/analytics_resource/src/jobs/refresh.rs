@@ -238,7 +238,7 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         }
     }
 
-    Ok(build_snapshot(SnapshotInputs {
+    let mut snapshot = build_snapshot(SnapshotInputs {
         assertions,
         lifecycles,
         resources: &rows,
@@ -256,7 +256,38 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         dispatch_usage: &dispatch_usage,
         read_only: job.read_only,
         now: Utc::now(),
-    }))
+    });
+
+    // 活跃取回：一次查完再回填详情，避免详情区逐行查租约。读失败只降级成“没有取回状态”，
+    // 不影响刷新本身（与标签 / 断言同一纪律）。
+    let leases = store.active_leases().await.unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "读取活跃取回租约失败，详情不显示取回状态");
+        Default::default()
+    });
+    for detail in snapshot.details.values_mut() {
+        if let Some(lease) = leases.get(&detail.id) {
+            detail.checkout_label = Some(checkout_label(detail.scope, lease));
+        }
+    }
+    Ok(snapshot)
+}
+
+/// 活跃取回 → 详情行文案。项目资产从本项目本体取回；全局行则标清“从全局取回”。
+fn checkout_label(
+    scope: crate::model::RowScope,
+    lease: &crate::store::file_asset::CheckoutLease,
+) -> String {
+    let prefix = match scope {
+        crate::model::RowScope::Global => "已从全局取回",
+        crate::model::RowScope::Project => "已取回",
+    };
+    // 草稿在草稿箱外时记的是绝对路径：直接报路径，别再冠「草稿箱/」误导人。
+    let dest = if std::path::Path::new(&lease.dest_rel).is_absolute() {
+        lease.dest_rel.clone()
+    } else {
+        format!("草稿箱/{}", lease.dest_rel.trim_start_matches(['/', '\\']))
+    };
+    format!("{prefix}：{dest}（基准 v{}）", lease.base_version)
 }
 
 /// 读全局视图（§13 展示层；工作线程上执行）：全局实例行 + 全局存档的使用面。

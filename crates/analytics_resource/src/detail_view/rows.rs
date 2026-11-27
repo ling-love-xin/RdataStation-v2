@@ -73,6 +73,10 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     if !detail.dispatch_label.is_empty() {
         basic.push(("使用", detail.dispatch_label.clone()));
     }
+    // 活跃取回：同一资产同时只能有一份草稿在外面；不摆出来，用户不知道为什么再取回会被拒。
+    if let Some(label) = detail.checkout_label.as_deref() {
+        basic.push(("取回", label.to_string()));
+    }
     sections.push((BASIC_SECTION_TITLE.to_string(), basic));
 
     // 2) 来源（归档凭证的"出处"：回答这结论是用什么数据得出的）

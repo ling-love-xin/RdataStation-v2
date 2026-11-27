@@ -34,6 +34,10 @@ pub struct CheckoutDialogSeed {
     pub target_dir_label: String,
     /// 取回时的存档版本（用于"再归档将生成 vN+1"的提示）。
     pub version: i32,
+    /// 已有活跃取回时的说明（来自详情快照）；`None` = 当前没有草稿在外面。
+    ///
+    /// 同一资产只允许一条 active 租约，这里提前说清，避免用户点「取回」后才撞到拒绝。
+    pub active_checkout: Option<String>,
 }
 
 /// 表单的输入实体与勾选态（开窗前建好；测试可复核同一批）。
@@ -197,6 +201,18 @@ pub fn open_checkout_dialog_with(
                             ))
                             .child(readonly_row(theme, "目标目录", &seed.target_dir_label)),
                     )
+                    .when_some(seed.active_checkout.clone(), |this, label| {
+                        this.child(
+                            div()
+                                .debug_selector(|| "checkout-dialog-active-lease".to_string())
+                                .child(hint_line(
+                                    &format!(
+                                        "{label}；同一资产同时只能有一份草稿，再取回会被拒绝"
+                                    ),
+                                    theme.colors.warning,
+                                )),
+                        )
+                    })
                     .child(
                         div()
                             .v_flex()

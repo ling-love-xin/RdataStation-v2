@@ -289,6 +289,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_active_lease
 - `VersionDiffSeed.current_version` 改名 `new_version`，标题 / 副标题按两版实际版本号显示。
 - 测试：`t124` 造 v1→v2→v3，验证 v1↔v3 不混入 v2、v1↔v2 不混入当前 v3、反着点仍排 v1→v3；`cargo test -p rds-analytics-resource --lib -j 1 --no-fail-fast -- --test-threads=1` 295 passed（并行全量会因 DuckDB 文件锁 / 全局标签残留抖动，串行是稳定口径）；`dialog_window` 11 项通过。顺带修 `g021`：全局标签名唯一化并在用例结束删除，避免重复跑污染 `data/system/global.db`。
 
+#### M5 第五刀（2026-11-27）
+
+- 详情面板认识活跃取回：`store/file_asset.rs::active_leases()` 一次 `SELECT ... state='active'` 收成 `HashMap<resource_id, CheckoutLease>`，刷新快照时回填 `ArchiveDetail.checkout_label`，基础信息多一行「取回」（草稿落点 + 基准版本）；`to_detail` 仍不查库。
+- 取回对话框先亮底：`CheckoutDialogSeed.active_checkout` 带同一文案，在「目标目录」后渲染警告（`checkout-dialog-active-lease`）——同一资产只能有一份草稿，再取回会被唯一租约拒绝；取回按钮 tooltip 也复用该状态，但按钮不置灰，保留错误提示入口。
+- 修 `t132` 挖出的旧错：项目取回的租约把**资产本体路径**（`meta.sql`）写进了 `dest_rel`，详情会误报草稿位置；现改为相对草稿箱的落点（`checkout_dest_rel`），落到草稿箱外则记绝对路径，文案不再冠「草稿箱/」。草稿箱目录名常数收进 `payload::SCRATCHPAD_DIR_NAME`，宿主常量转引它。
+- 测试：`t132` 补 `active_leases()` 断言（基准 v1、落点含「工作副本」）；`detail_view` 新增「有取回才显示该行」；`dialog_window` 新增活跃租约警告用例（12 项）；`panel_window` 详情字面量补 `checkout_label: None`。
+- 验证：`cargo check -p rds-analytics-resource --all-targets -j 1` 通过；`cargo test -p rds-analytics-resource --lib -j 1 --no-fail-fast -- --test-threads=1` 296 passed；`dialog_window` 12 项、`panel_window` 29 项通过；`cargo check -p rds-workbench --lib -j 1` 通过。
+
 ### 9.2 与计划的偏差
 
 - `ArchiveRequest` 未新增 `file_meta` 字段：服务按 `promoted_from` 字符串约定直接读 sidecar，避免把完整元数据穿过 UI 请求层，也避免破坏 `DraftCandidate` 的 `Eq`。

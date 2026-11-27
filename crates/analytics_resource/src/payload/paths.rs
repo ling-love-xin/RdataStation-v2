@@ -16,6 +16,10 @@ impl PayloadStore {
     pub fn resources_dir(&self) -> PathBuf {
         self.project_root.join(RESOURCES_DIR_NAME)
     }
+    /// 草稿箱根：`{项目}/scratchpad/`（取回目标的默认落点）。
+    pub fn scratchpad_dir(&self) -> PathBuf {
+        self.project_root.join(SCRATCHPAD_DIR_NAME)
+    }
     /// 项目级回收站（`.RSmeta/trash/`）：本体删除与还原走它（原型 §4.7）。
     ///
     /// 回收站是**整个项目**的（草稿箱与资产库共用），所以它不认识 `resources/`——

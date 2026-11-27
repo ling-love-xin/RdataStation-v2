@@ -96,6 +96,11 @@ pub struct ArchiveDetail {
     /// 空 = 不显示这一行：项目行没有「被谁用过」这个概念（它的来源在 `promoted_from`），
     /// 全局行没人分发过也不该占一行。
     pub dispatch_label: String,
+    /// 活跃取回（检出）的说明，如 "已取回：草稿箱/月报（工作副本）.sql（基准 v3）"。
+    ///
+    /// `None` = 当前没有把内容取到草稿箱。同一资产同时只允许一条 active 租约：
+    /// 详情摆出来，用户才知道外面已有一份待归档的草稿，不会对「再取回为什么被拒」发懵。
+    pub checkout_label: Option<String>,
 }
 
 impl ArchiveDetail {

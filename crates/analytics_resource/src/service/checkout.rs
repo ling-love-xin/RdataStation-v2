@@ -4,6 +4,14 @@ use super::*;
 use crate::model::*;
 
 impl ArchiveService {
+    /// 草稿落点：相对草稿箱记短路径；落到草稿箱外就记绝对路径，别伪装成草稿箱条目。
+    fn checkout_dest_rel(&self, dest: &std::path::Path) -> String {
+        match dest.strip_prefix(self.payload.scratchpad_dir()) {
+            Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+            Err(_) => dest.to_string_lossy().into_owned(),
+        }
+    }
+
     /// 取回（检出）：把本体复制成可写工作副本，本体不动。
     pub async fn checkout(&self, req: CheckoutRequest) -> Result<CheckoutOutcome, CoreError> {
         // 目标不得落在 resources/ 内：那等于绕开只读守卫写本体。
@@ -52,9 +60,11 @@ impl ArchiveService {
         };
 
         // 取回是带 base_version 的租约，不是 OS 锁；同一资产同一 scope 只允许一条 active。
+        // `dest_rel` 记草稿落点（相对草稿箱），不是资产本体路径：详情 / 再归档都靠它找草稿。
+        let draft_rel = self.checkout_dest_rel(&req.dest_path);
         if let Err(error) = self
             .store
-            .create_lease(&resource.id, "project", resource.version, &rel_path)
+            .create_lease(&resource.id, "project", resource.version, &draft_rel)
             .await
         {
             // 工作副本没有租约就再归档无法校验 base：宁可删掉刚落的副本。

@@ -489,6 +489,15 @@ async fn t132_file_meta_roundtrip_and_single_active_lease() {
         Some(&meta),
         "取回应把 manifest 里的完整 FileMeta 交回"
     );
+    // 批量活跃租约（刷新快照用）：一次查完整张表，按资源 id 建映射。
+    let active = service.store().active_leases().await.expect("active leases");
+    let lease = active.get(&first.resource_id).expect("该资产应有活跃取回");
+    assert_eq!(lease.base_version, 1, "租约基准是取回时的版本");
+    assert!(
+        lease.dest_rel.contains("工作副本"),
+        "租约要记住草稿落点：{}",
+        lease.dest_rel
+    );
 
     let second_dest = dir.join("scratchpad").join("meta（第二份）.sql");
     assert!(

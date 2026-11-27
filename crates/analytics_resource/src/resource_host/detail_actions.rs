@@ -195,6 +195,7 @@ pub(super) fn request_checkout(host: &ResourceHost, detail: &ArchiveDetail, wind
             file_name: suggest_work_copy_name(&detail.name, extension),
             target_dir_label: target_dir.to_string_lossy().to_string(),
             version: detail.version,
+            active_checkout: detail.checkout_label.clone(),
         };
 
         let backend = host.backend.clone();

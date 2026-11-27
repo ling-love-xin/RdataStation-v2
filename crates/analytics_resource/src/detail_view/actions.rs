@@ -223,6 +223,12 @@ pub(super) fn render_actions(
             // 三个判据都走同一份上下文（多选的限制在列表侧，详情恒单选）。
             let can_open = can_open(&ctx);
             let can_checkout = can_checkout(&ctx);
+            // 已有活跃取回时把租约摆到按钮提示里：同一资产只能有一份草稿在外面，
+            // 不说明的话用户只会看到“取回失败”，不知道先要归档 / 放弃哪份草稿。
+            let checkout_tip = detail
+                .checkout_label
+                .clone()
+                .unwrap_or_else(|| tr("复制一份可写的工作副本（本体不动）").to_string());
             let is_reference = detail.payload_mode == PayloadMode::Reference;
             // 文件型（本体在本项目 resources/）：删除 = 软删登记 + 本体进回收站；
             // 取回是独立动作，不再从删除入口自动解锁退草稿。
@@ -290,6 +296,7 @@ pub(super) fn render_actions(
                                 Button::new("archive-detail-checkout")
                                     .ghost()
                                     .label(tr("取回（检出）…"))
+                                    .tooltip(checkout_tip.clone())
                                     .disabled(!can_checkout)
                                     .on_click({
                                         let host = host.clone();

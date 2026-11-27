@@ -321,6 +321,7 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         },
         // 窗口用例不测使用面：空串 → 详情不多画那一行。
         dispatch_label: String::new(),
+        checkout_label: None,
     }
 }
 

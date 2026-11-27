@@ -20,6 +20,8 @@ pub(crate) use tokio::io::AsyncReadExt;
 
 /// 受管内容目录名（项目根下**可见**的模块目录）。
 pub const RESOURCES_DIR_NAME: &str = "resources";
+/// 草稿箱目录名（项目根下**可见**；取回 / 检出落到这里）。
+pub const SCRATCHPAD_DIR_NAME: &str = "scratchpad";
 /// 项目内部元数据目录名。
 ///
 /// 直接引用 engine 已有常量，而不是再写一份字面量：`.RSmeta` 这一拼写当前有多处各自声明

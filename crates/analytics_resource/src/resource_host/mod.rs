@@ -52,8 +52,8 @@ pub(crate) use crate::resource_view::{GroupOption, ResourcesHost};
 pub(crate) use crate::jobs as resource_jobs;
 
 // 草稿箱在本项目里的目录名 / 来源标记：只是字符串约定，不为此反向依赖 scratchpad crate。
-// 值须与 `scratchpad::MODULE_DIR_NAME` / `ORIGIN_SCRATCHPAD` 保持一致（2026-11-12 分层收口）。
-pub(crate) const SCRATCHPAD_DIR: &str = "scratchpad";
+// 目录名以 payload 的路径常量为准；来源标记须与 `scratchpad::ORIGIN_SCRATCHPAD` 一致。
+pub(crate) const SCRATCHPAD_DIR: &str = crate::payload::SCRATCHPAD_DIR_NAME;
 pub(crate) const ORIGIN_SCRATCHPAD: &str = "scratchpad";
 
 /// 资产库宿主的 workbench 能力面（P2-b 下沉引入，与 `ResourcesHost` 方向相反）：

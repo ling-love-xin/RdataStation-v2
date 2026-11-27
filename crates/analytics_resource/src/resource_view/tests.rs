@@ -382,6 +382,7 @@ fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> Ar
         group: None,
         preview: crate::preview::Preview::default(),
         dispatch_label: String::new(),
+        checkout_label: None,
     }
 }
 
