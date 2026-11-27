@@ -125,7 +125,9 @@ impl GlobalInstanceStore {
     /// 某全局文件资产的完整版本索引（升序），供详情时间线展示历史。
     ///
     /// 文件资产每升一版就新建一条 `analytics_resources` 行，`resource_id` 不是稳定链键；
-    /// 版本链按全局名（同一资产的所有版本共用 `name` + `scope='global'`）聚合。
+    /// 稳定链键是 `parent_resource_id`（每版都指向上一版）。这里从当前 head 向上找到
+    /// 链根，再向下收齐同一根的所有版本：**不再按 `name` 聚合**，所以即使历史行被改名
+    /// 或同名但不同根，也不会断链 / 混链。
     pub(crate) fn global_file_versions(
         &self,
         name: &str,
@@ -134,11 +136,39 @@ impl GlobalInstanceStore {
             let mut stmt = conn
                 .prepare(
                     r#"
+                    WITH RECURSIVE
+                    anchor(id) AS (
+                        SELECT id FROM analytics_resources
+                        WHERE name = ?1 AND scope = 'global'
+                        ORDER BY (deleted_at IS NULL) DESC, version DESC, id ASC
+                        LIMIT 1
+                    ),
+                    up(id) AS (
+                        SELECT id FROM anchor
+                        UNION
+                        SELECT ar.parent_resource_id
+                        FROM analytics_resources ar
+                        JOIN up ON ar.id = up.id
+                        WHERE ar.parent_resource_id IS NOT NULL
+                    ),
+                    root(id) AS (
+                        SELECT up.id FROM up
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM analytics_resources p
+                            WHERE p.id = up.id AND p.parent_resource_id IS NOT NULL
+                        )
+                        LIMIT 1
+                    ),
+                    chain(id) AS (
+                        SELECT id FROM root
+                        UNION
+                        SELECT ar.id FROM analytics_resources ar
+                        JOIN chain ON ar.parent_resource_id = chain.id
+                    )
                     SELECT fav.resource_id, fav.version, fav.manifest_id, fav.content_hash, fav.meta_hash,
                            fav.parent_version, fav.content_pruned, fav.created_at
                     FROM file_asset_versions fav
-                    JOIN analytics_resources ar ON ar.id = fav.resource_id
-                    WHERE ar.name = ?1 AND ar.scope = 'global'
+                    WHERE fav.resource_id IN (SELECT id FROM chain)
                     ORDER BY fav.version ASC
                     "#,
                 )
@@ -160,11 +190,40 @@ impl GlobalInstanceStore {
         let row: Option<(String, Option<String>, String, i64)> = self.with_sqlite(|conn| {
             conn.query_row(
                 r#"
+                WITH RECURSIVE
+                anchor(id) AS (
+                    SELECT id FROM analytics_resources
+                    WHERE name = ?1 AND scope = 'global'
+                    ORDER BY (deleted_at IS NULL) DESC, version DESC, id ASC
+                    LIMIT 1
+                ),
+                up(id) AS (
+                    SELECT id FROM anchor
+                    UNION
+                    SELECT ar.parent_resource_id
+                    FROM analytics_resources ar
+                    JOIN up ON ar.id = up.id
+                    WHERE ar.parent_resource_id IS NOT NULL
+                ),
+                root(id) AS (
+                    SELECT up.id FROM up
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM analytics_resources p
+                        WHERE p.id = up.id AND p.parent_resource_id IS NOT NULL
+                    )
+                    LIMIT 1
+                ),
+                chain(id) AS (
+                    SELECT id FROM root
+                    UNION
+                    SELECT ar.id FROM analytics_resources ar
+                    JOIN chain ON ar.parent_resource_id = chain.id
+                )
                 SELECT fav.manifest_id, ar.file_rel_path, ar.content_hash, ar.file_size
                 FROM analytics_resources ar
                 JOIN file_asset_versions fav
                   ON fav.resource_id = ar.id AND fav.version = ar.version
-                WHERE ar.name = ?1 AND ar.scope = 'global' AND ar.version = ?2
+                WHERE ar.id IN (SELECT id FROM chain) AND ar.version = ?2
                 LIMIT 1
                 "#,
                 rusqlite::params![name, target_version],

@@ -2160,6 +2160,130 @@ async fn g090_publish_file_is_file_first_and_base_guarded() {
     let _ = fs::remove_dir_all(&env.dir);
 }
 
+/// 全局文件版本链的稳定键是 `parent_resource_id`，不是 `name`：
+/// 祖先行与 head 行分别改名后，历史仍完整；按新 head 名恢复旧版仍能命中。
+#[tokio::test]
+async fn g097_global_file_chain_follows_parent_ids_not_names() {
+    let env = create_test_env().await;
+    let (source1, manifest1) =
+        seed_project_manifest(&env, "global/chain-v1.csv", b"id,qty\n1,10\n").await;
+    let first = env
+        .store
+        .publish_file(&publish_req(
+            "chain_file",
+            &env,
+            source1,
+            manifest1,
+            "global/chain.csv",
+            None,
+        ))
+        .await
+        .expect("publish chain v1");
+    let (source2, manifest2) =
+        seed_project_manifest(&env, "global/chain-v2.csv", b"id,qty\n1,11\n").await;
+    let second = env
+        .store
+        .publish_file(&publish_req(
+            "chain_file",
+            &env,
+            source2,
+            manifest2,
+            "global/chain.csv",
+            Some(1),
+        ))
+        .await
+        .expect("publish chain v2");
+    assert_eq!(second.version, 2);
+
+    // 模拟未来开放全局改名：先改祖先行，head 名不变。
+    env.store
+        .with_sqlite(|conn| {
+            conn.execute(
+                "UPDATE analytics_resources SET name = 'chain_file_old' WHERE id = ?1",
+                rusqlite::params![&first.resource_id],
+            )
+            .map(|_| ())
+            .map_err(sqlite_err("rename_global_file_ancestor"))
+        })
+        .expect("rename ancestor");
+    let chain = env
+        .store
+        .global_file_versions("chain_file")
+        .expect("read chain after ancestor rename");
+    assert_eq!(chain.len(), 2, "祖先改名不能断掉 v2 的父链");
+    assert_eq!(
+        chain.iter().map(|v| v.version).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+
+    // 再改 head 名：从新名字仍应回到同一个根，并收齐整条链。
+    env.store
+        .with_sqlite(|conn| {
+            conn.execute(
+                "UPDATE analytics_resources SET name = 'chain_file_renamed' WHERE id = ?1",
+                rusqlite::params![&second.resource_id],
+            )
+            .map(|_| ())
+            .map_err(sqlite_err("rename_global_file_head"))
+        })
+        .expect("rename head");
+    let chain = env
+        .store
+        .global_file_versions("chain_file_renamed")
+        .expect("read chain by renamed head");
+    assert_eq!(chain.len(), 2, "按新名字也要回到旧名祖先行");
+    assert_eq!(
+        chain.iter().map(|v| v.version).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+
+    let restored = env
+        .store
+        .restore_file_version("chain_file_renamed", 1)
+        .await
+        .expect("restore v1 through renamed head");
+    assert_eq!(restored.version, 3, "恢复必须生成新 head");
+    let chain = env
+        .store
+        .global_file_versions("chain_file_renamed")
+        .expect("read chain after restore");
+    assert_eq!(
+        chain.iter().map(|v| v.version).collect::<Vec<_>>(),
+        vec![1, 2, 3],
+        "改名 + 恢复后仍是一条链"
+    );
+
+    // fork 是独立根：即使被直接改成与原链同名（模拟存量脏名），也不得混进原链。
+    let fork = env
+        .store
+        .fork_file("chain_file_renamed", 3, "chain_fork")
+        .await
+        .expect("fork from restored chain");
+    env.store
+        .with_sqlite(|conn| {
+            conn.execute(
+                "UPDATE analytics_resources SET name = 'chain_file_renamed' WHERE id = ?1",
+                rusqlite::params![&fork.child_resource_id],
+            )
+            .map(|_| ())
+            .map_err(sqlite_err("rename_global_file_fork"))
+        })
+        .expect("rename fork");
+    let chain = env
+        .store
+        .global_file_versions("chain_file_renamed")
+        .expect("read chain with same-name fork");
+    assert_eq!(chain.len(), 3, "同名 fork 不能并进原链");
+    assert!(
+        chain
+            .iter()
+            .all(|v| v.resource_id != fork.child_resource_id),
+        "fork 的 resource_id 不得出现在原链"
+    );
+
+    let _ = fs::remove_dir_all(&env.dir);
+}
+
 #[tokio::test]
 async fn g091_binary_global_file_has_no_table() {
     let env = create_test_env().await;
