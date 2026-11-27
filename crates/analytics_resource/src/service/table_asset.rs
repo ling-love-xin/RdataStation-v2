@@ -90,7 +90,16 @@ pub async fn archive_table(
 
     let existing = match request.asset_id.as_deref() {
         Some(id) => Some(store.get_resource_by_id(id).await?),
-        None if !request.name.trim().is_empty() => store.latest_alive_by_name(request.name.trim()).await?,
+        None if !request.name.trim().is_empty() => {
+            let mut matches = store.alive_by_name(request.name.trim()).await?;
+            if matches.len() > 1 {
+                return Err(user_err(&format!(
+                    "显示名「{}」对应多个存活资产，无法判断接续哪一条版本链；请用资产 id 指定",
+                    request.name.trim()
+                )));
+            }
+            matches.pop()
+        }
         None => None,
     };
     if let Some(row) = &existing {

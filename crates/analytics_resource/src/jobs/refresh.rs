@@ -126,9 +126,15 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
     let payload = PayloadStore::new(job.project_root.clone());
 
     let rows = store
-        .list_file_archives()
+        .list_alive_resources()
         .await
         .map_err(|e| format!("读取存档列表失败：{e}"))?;
+    // 表资产没有 `file_rel_path`，必须和文件行一起进面板；按 id 身份返回，
+    // 不再按显示名去重（同名不同 id 的资产各自是一行）。
+    let table_versions = store.all_table_asset_versions().await.unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "读取表资产版本链失败，表版本区降级为空");
+        Default::default()
+    });
     // 先补齐上次「索引已提交、本体未替换」的暂存内容，再扫描——否则 scan 会把这种
     // 可自动恢复的状态误报成 `ContentChanged` 交给用户手工处理。
     replay_staging(&job.project_root, &rows).await;
@@ -281,6 +287,7 @@ pub(super) async fn run_refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, S
         history_counts: &history_counts,
         recent_versions: &recent_versions,
         restorable_versions: &restorable_versions,
+        table_versions: &table_versions,
         tags: &tags_by_resource,
         tag_dictionary,
         folders: &folders_by_resource,
@@ -458,6 +465,124 @@ pub(crate) fn free_dest(dest: &Path) -> PathBuf {
         }
     }
     dest.to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{
+        ArchiveBinding, ArchiveKind, NewArchiveInput, PayloadMode,
+    };
+    use crate::service::table_asset::ArchiveTableRequest;
+
+    async fn exec(manager: &ProjectDatabaseManager, sql: &str) {
+        let duckdb = manager.duckdb_conn().expect("write handle");
+        let handle = duckdb.acquire().await.expect("acquire");
+        let guard = handle.lock().await;
+        guard
+            .as_ref()
+            .expect("conn")
+            .execute_batch(sql)
+            .expect("exec");
+    }
+
+    fn file_input(name: &str, rel_path: &str) -> NewArchiveInput {
+        NewArchiveInput {
+            resource_type: "file".to_string(),
+            name: name.to_string(),
+            alias: None,
+            kind: ArchiveKind::File,
+            content_hash: "file-hash".to_string(),
+            definition_sql: None,
+            row_count: None,
+            column_count: None,
+            file_rel_path: rel_path.to_string(),
+            payload_mode: PayloadMode::Copy,
+            source_path: Some(rel_path.to_string()),
+            file_size: Some(12),
+            structured: false,
+            binding: ArchiveBinding::default(),
+            scope: "project".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_keeps_file_and_table_assets_and_loads_table_history() {
+        let dir = crate::tests::temp_project_dir("refresh_all_assets");
+        let manager = ProjectDatabaseManager::open(&dir, SQLITE_POOL_SIZE)
+            .await
+            .expect("open project");
+        exec(&manager, "CREATE TABLE main.orders_v1 AS SELECT 1 AS id;").await;
+        exec(&manager, "CREATE TABLE main.orders_v2 AS SELECT 1 AS id UNION ALL SELECT 2;")
+            .await;
+        let store = AnalyticsResourceStore::new(manager.sqlite_pool());
+        let file = store
+            .insert_archive(file_input("留存文件", "resources/keep.txt"))
+            .await
+            .expect("insert file");
+        drop(store);
+        drop(manager);
+
+        let first = crate::service::table_asset::archive_table_at(
+            &dir,
+            &ArchiveTableRequest {
+                name: "订单快照".to_string(),
+                source_schema: "main".to_string(),
+                source_table: "orders_v1".to_string(),
+                asset_id: None,
+                consume_source: true,
+            },
+        )
+        .await
+        .expect("archive table v1");
+        crate::service::table_asset::archive_table_at(
+            &dir,
+            &ArchiveTableRequest {
+                name: "订单快照".to_string(),
+                source_schema: "main".to_string(),
+                source_table: "orders_v2".to_string(),
+                asset_id: Some(first.resource_id.clone()),
+                consume_source: true,
+            },
+        )
+        .await
+        .expect("archive table v2");
+
+        let snapshot = run_refresh(&RefreshJob {
+            project_root: dir.clone(),
+            read_only: false,
+        })
+        .await
+        .expect("refresh");
+
+        let file_row = snapshot
+            .rows
+            .iter()
+            .find(|row| row.id == file.id)
+            .expect("文件行必须进面板");
+        assert_eq!(file_row.kind, ArchiveKind::File);
+        let table_row = snapshot
+            .rows
+            .iter()
+            .find(|row| row.id == first.resource_id)
+            .expect("表行必须进面板");
+        assert_eq!(table_row.kind, ArchiveKind::AnalyticsTable);
+
+        let table_detail = snapshot
+            .details
+            .get(&first.resource_id)
+            .expect("表资产详情");
+        assert_eq!(table_detail.version_timeline.len(), 2, "v1+v2 都要进时间线");
+        assert!(
+            table_detail.history_label.contains("1 个历史版本"),
+            "详情历史数必须来自表版本链，实际：{}",
+            table_detail.history_label
+        );
+
+        // 不在这里删项目目录：DuckDB 根连接是进程级的，删掉仍在挂载的库会连累
+        // 同一进程里并行跑的其他表资产测试（WAL 打不开）。留待 `temp_project_dir`
+        // 的 1 小时过期清理收尾。
+    }
 }
 
 /// 提交一次刷新（**事件路径**调用：激活面板 / 打开或切换项目 / 归档等变更之后）。

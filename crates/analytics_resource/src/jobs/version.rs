@@ -52,6 +52,9 @@ pub(crate) struct VersionDiffJob {
 pub struct VersionRows {
     pub resource_id: String,
     pub seed: VersionDialogSeed,
+    /// 数据来自全局实例（项目库没有这个 id）：对话框动作栏必须收敛为只读，
+    /// 不能把全局行当项目行去还原 / 取回。
+    pub global: bool,
 }
 
 /// 版本 diff 取数结果（宿主据此开 diff 对话框）。
@@ -66,6 +69,18 @@ pub struct VersionDiffRows {
 /// “副本在不在”与“本体在不在”都要问文件系统（`.RSmeta` 与 `resources/`），
 /// 所以这一整套也在工作线程上——渲染期零 I/O 的纪律同样适用于对话框。
 pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, String> {
+    match load_project_versions(job).await {
+        Ok(rows) => Ok(rows),
+        Err(project_error) => match load_global_versions(job).await {
+            Ok(rows) => Ok(rows),
+            Err(_) => Err(project_error),
+        },
+    }
+}
+
+/// 项目侧版本链（文件读 `analytics_resource_versions` + `file_asset_versions`，
+/// 表读 `table_asset_versions`）。
+async fn load_project_versions(job: &VersionsJob) -> Result<VersionRows, String> {
     let service = open_service(job.project_root.clone()).await?;
     let current = service
         .store()
@@ -190,11 +205,71 @@ pub(crate) async fn load_versions(job: &VersionsJob) -> Result<VersionRows, Stri
             ),
             timeline: build_timeline_rows(&current, &versions, &events),
         },
+        global: false,
+    })
+}
+
+/// 全局侧版本链：全局表按 asset_id，全局文件按 name 聚合（文件每版一行资源）。
+///
+/// 全局行没有项目标签 / 分组 / 履历事件，时间线只给版本节点；动作栏由宿主按
+/// `VersionRows.global` 收敛为只读 + 对比。
+async fn load_global_versions(job: &VersionsJob) -> Result<VersionRows, String> {
+    let store = crate::global::GlobalInstanceStore::production()
+        .await
+        .map_err(|error| format!("全局实例未初始化，无法读取全局版本历史：{error}"))?;
+    let current = crate::global::get_global_resource(&store, &job.resource_id)
+        .map_err(|error| format!("读取全局资产失败：{error}"))?
+        .ok_or_else(|| format!("全局资产 {} 不存在或已删除", job.resource_id))?;
+    let is_table =
+        ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref())
+            == ArchiveKind::AnalyticsTable;
+    let table_versions = if is_table {
+        store
+            .global_table_versions(&current.id)
+            .map_err(|error| format!("读取全局表版本链失败：{error}"))?
+    } else {
+        Vec::new()
+    };
+    let file_versions = if is_table {
+        Vec::new()
+    } else {
+        store
+            .global_file_versions(&current.name)
+            .map_err(|error| format!("读取全局文件版本链失败：{error}"))?
+    };
+    Ok(VersionRows {
+        resource_id: current.id.clone(),
+        seed: VersionDialogSeed {
+            name: current.name.clone(),
+            current_version: current.version,
+            rows: build_version_rows(
+                &current,
+                &[],
+                &file_versions,
+                &table_versions,
+                true,
+            ),
+            // 全局库没有项目侧标签 / 分组 / 履历事件；空时间线不会让对话框打不开。
+            timeline: Vec::new(),
+        },
+        global: true,
     })
 }
 
 /// 取两版内容并生成 unified patch（只读；文件文本 / 表快照在此分流）。
 pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDiffRows, String> {
+    match load_project_version_diff(job).await {
+        Ok(rows) => Ok(rows),
+        Err(project_error) => match load_global_version_diff(job).await {
+            Ok(rows) => Ok(rows),
+            Err(_) => Err(project_error),
+        },
+    }
+}
+
+async fn load_project_version_diff(
+    job: &VersionDiffJob,
+) -> Result<VersionDiffRows, String> {
     let (service, manager) = open_service_with_manager(job.project_root.clone()).await?;
     let current = service
         .store()
@@ -301,6 +376,128 @@ pub(crate) async fn load_version_diff(job: &VersionDiffJob) -> Result<VersionDif
             summary: None,
         },
     })
+}
+
+/// 全局侧版本对比：表读全局快照 + 全局 DuckDB；文件读全局 CAS 的 manifest 内容。
+async fn load_global_version_diff(
+    job: &VersionDiffJob,
+) -> Result<VersionDiffRows, String> {
+    let store = crate::global::GlobalInstanceStore::production()
+        .await
+        .map_err(|error| format!("全局实例未初始化，无法对比全局版本：{error}"))?;
+    let current = crate::global::get_global_resource(&store, &job.resource_id)
+        .map_err(|error| format!("读取全局资产失败：{error}"))?
+        .ok_or_else(|| format!("全局资产 {} 不存在或已删除", job.resource_id))?;
+    let (old_v, new_v) = diff_sides(job.version, job.against, current.version)?;
+    let kind = ArchiveKind::resolve(&current.kind, current.analytics_table.as_deref());
+    let name = current.name.clone();
+
+    if kind == ArchiveKind::AnalyticsTable {
+        let versions = store
+            .global_table_versions(&current.id)
+            .map_err(|error| format!("读取全局表版本链失败：{error}"))?;
+        let old_row = versions
+            .iter()
+            .find(|row| row.version == old_v)
+            .ok_or_else(|| format!("v{old_v} 不在全局表版本链里，无法对比"))?;
+        let new_row = versions
+            .iter()
+            .find(|row| row.version == new_v)
+            .ok_or_else(|| format!("v{new_v} 不在全局表版本链里，无法对比"))?;
+        let old_manifest = store
+            .global_table_manifest(&old_row.manifest_id)
+            .map_err(|error| format!("读取 v{old_v} 全局 manifest 失败：{error}"))?
+            .ok_or_else(|| format!("v{old_v} 的全局 manifest 已缺失，无法对比"))?;
+        let new_manifest = store
+            .global_table_manifest(&new_row.manifest_id)
+            .map_err(|error| format!("读取 v{new_v} 全局 manifest 失败：{error}"))?
+            .ok_or_else(|| format!("v{new_v} 的全局 manifest 已缺失，无法对比"))?;
+        let old_snapshot = store
+            .global_table_snapshot(&old_row.snapshot_id)
+            .map_err(|error| format!("读取 v{old_v} 全局快照失败：{error}"))?
+            .ok_or_else(|| format!("v{old_v} 的全局物理快照已缺失，无法对比"))?;
+        let new_snapshot = store
+            .global_table_snapshot(&new_row.snapshot_id)
+            .map_err(|error| format!("读取 v{new_v} 全局快照失败：{error}"))?
+            .ok_or_else(|| format!("v{new_v} 的全局物理快照已缺失，无法对比"))?;
+        let report = store
+            .with_duckdb(|conn| {
+                crate::table_asset::diff::table_version_diff(
+                    conn,
+                    &name,
+                    old_v,
+                    new_v,
+                    &old_manifest,
+                    &new_manifest,
+                    &old_snapshot,
+                    &new_snapshot,
+                )
+            })
+            .await
+            .map_err(|error| format!("生成全局表版本差异失败：{error}"))?;
+        return Ok(VersionDiffRows {
+            resource_id: current.id,
+            seed: VersionDiffSeed {
+                name,
+                old_version: old_v,
+                new_version: new_v,
+                patch: report.patch,
+                kind: VersionDiffKind::Table,
+                summary: Some(report.summary),
+            },
+        });
+    }
+
+    let versions = store
+        .global_file_versions(&name)
+        .map_err(|error| format!("读取全局文件版本链失败：{error}"))?;
+    let old_row = versions
+        .iter()
+        .find(|row| row.version == old_v)
+        .ok_or_else(|| format!("v{old_v} 不在全局文件版本链里，无法对比"))?;
+    let new_row = versions
+        .iter()
+        .find(|row| row.version == new_v)
+        .ok_or_else(|| format!("v{new_v} 不在全局文件版本链里，无法对比"))?;
+    let old_text = read_global_manifest_text(&store, &old_row.manifest_id).await?;
+    let new_text = read_global_manifest_text(&store, &new_row.manifest_id).await?;
+    if diff_text_too_large(&old_text, &new_text) {
+        return Err(DIFF_TOO_LARGE.to_string());
+    }
+    let patch = unified_patch(&name, old_v, new_v, &old_text, &new_text);
+    Ok(VersionDiffRows {
+        resource_id: current.id,
+        seed: VersionDiffSeed {
+            name,
+            old_version: old_v,
+            new_version: new_v,
+            patch,
+            kind: VersionDiffKind::File,
+            summary: None,
+        },
+    })
+}
+
+/// 从全局 CAS 读某一版的首个内容条目（与项目侧 `read_manifest_text` 同口径）。
+async fn read_global_manifest_text(
+    store: &crate::global::GlobalInstanceStore,
+    manifest_id: &str,
+) -> Result<String, String> {
+    let cas = store.file_cas();
+    let manifest = cas
+        .read_manifest(manifest_id)
+        .await
+        .map_err(|error| format!("读取全局 v{manifest_id} manifest 失败：{error}"))?;
+    let entry = manifest
+        .content_entry()
+        .ok_or_else(|| "该全局版本没有内容条目，无法对比".to_string())?;
+    let path = cas
+        .blob_path(&entry.hash)
+        .map_err(|error| format!("解析全局内容对象失败：{error}"))?;
+    if !path.is_file() {
+        return Err(format!("全局内容对象 {} 不在位，无法对比", path.display()));
+    }
+    read_text_file(&path)
 }
 
 /// 选中的两版按版本号排成「旧侧 → 新侧」：diff 永远读旧→新，跟点选顺序无关。

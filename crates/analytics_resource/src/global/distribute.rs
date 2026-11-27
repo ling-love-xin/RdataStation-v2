@@ -283,7 +283,7 @@ impl GlobalInstanceStore {
                 .await
                 .map_err(InstanceOpError::Core)?;
             let content_hash = global_hash.clone().unwrap_or(manifest.content_hash);
-            let outcome = self
+            let outcome = match self
                 .register_project_file(
                     project,
                     &target_name,
@@ -294,7 +294,26 @@ impl GlobalInstanceStore {
                     global_size,
                 )
                 .await
-                .map_err(InstanceOpError::Core)?;
+            {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    // 本体已经从全局 CAS 物化到 `resources/`：登记失败必须把这份
+                    // 无主文件收掉，否则项目里会留下“文件在、资产不在”的残留。
+                    let dest = store
+                        .resolve(rel)
+                        .unwrap_or_else(|_| project_root.join(crate::payload::RESOURCES_DIR_NAME).join(rel));
+                    if let Err(cleanup) = tokio::fs::remove_file(&dest).await {
+                        if cleanup.kind() != std::io::ErrorKind::NotFound {
+                            tracing::error!(
+                                error = %cleanup,
+                                path = %dest.display(),
+                                "分发登记失败后清理已物化文件失败"
+                            );
+                        }
+                    }
+                    return Err(InstanceOpError::Core(error));
+                }
+            };
             outcome
         } else {
             // 分析表 / 数据文件映射表 → 建项目表（`AnalyticsTable` 档）。

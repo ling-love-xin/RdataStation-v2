@@ -208,8 +208,8 @@ pub(super) fn render_body_sections(
         }
         // 版本分区多一个入口（原型 §3.1 的「查看全部…」）：打开版本历史对话框。
         // 只读项目下也可用——历史读取与还原是两件事，后者在对话框里自己管。
-        // 全局行没有本地版本历史（本体在全局实例），入口不摆（§13.4 动作收敛）。
-        if is_version_section && detail.scope != RowScope::Global {
+        // 全局行同样摆：全局实例有独立版本链，对话框按全局 scope 收敛为只读 + 对比。
+        if is_version_section {
             if let Some(actions) = actions {
                 let host = actions.host.clone();
                 let resource_id = detail.id.clone();

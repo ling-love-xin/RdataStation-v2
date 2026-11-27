@@ -452,6 +452,46 @@ impl AnalyticsResourceStore {
             .map_err(|error| tav_err("collect_versions", error))
     }
 
+    /// 全部项目表资产的版本链（按 asset_id 收成映射，供一次刷新批量回填）。
+    ///
+    /// 与逐行 `table_asset_versions` 同一查询口径；面板行数不大，但一版一查会变成
+    /// N+1，详情时间线只需要“当前 head 的版本链”。
+    pub async fn all_table_asset_versions(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<TableAssetVersion>>, CoreError> {
+        let conn = self.get_conn().await?;
+        let mut stmt = conn
+            .inner()?
+            .prepare(
+                r#"
+                SELECT asset_id, version, snapshot_id, manifest_id, parent_version, created_at
+                FROM table_asset_versions
+                ORDER BY asset_id ASC, version ASC
+                "#,
+            )
+            .map_err(|error| tav_err("prepare_all_versions", error))?;
+        let rows = stmt
+            .query_map([], |row| {
+                let created_at: String = row.get(5)?;
+                Ok(TableAssetVersion {
+                    asset_id: row.get(0)?,
+                    version: row.get(1)?,
+                    snapshot_id: row.get(2)?,
+                    manifest_id: row.get(3)?,
+                    parent_version: row.get(4)?,
+                    created_at: AnalyticsResourceStore::parse_datetime_sqlite(created_at)?,
+                })
+            })
+            .map_err(|error| tav_err("query_all_versions", error))?;
+        let mut out: std::collections::HashMap<String, Vec<TableAssetVersion>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let version = row.map_err(|error| tav_err("collect_all_versions", error))?;
+            out.entry(version.asset_id.clone()).or_default().push(version);
+        }
+        Ok(out)
+    }
+
     /// 某资产某一版。
     pub async fn table_asset_version(
         &self,

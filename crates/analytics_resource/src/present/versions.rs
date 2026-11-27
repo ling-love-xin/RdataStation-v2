@@ -64,6 +64,23 @@ pub fn build_version_rows(
             });
         }
     } else {
+        if versions.is_empty() && !file_versions.is_empty() {
+            // 全局文件版本链只有 `file_asset_versions`（每版一行资源，没有 JSON 旧行）：
+            // 历史时间 / 指纹从版本索引取，体积缺失给空串（不拿当前版本顶替）。
+            for version in file_versions
+                .iter()
+                .filter(|version| version.version != current.version)
+            {
+                candidates.push(Candidate {
+                    version: version.version,
+                    size: None,
+                    hash: Some(version.content_hash.clone()),
+                    time: version.created_at,
+                    is_current: false,
+                    has_copy: !version.content_pruned,
+                });
+            }
+        }
         for version in versions {
             // 快照是当时那条资源记录的序列化；字段结构随迁移演进，解析不出来不算错。
             let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();

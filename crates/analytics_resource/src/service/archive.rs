@@ -166,6 +166,24 @@ impl ArchiveService {
                 ),
             ));
         }
+        // 显示名在存活资产里唯一（身份仍是 id）：同名并存会让行选择、链归属和
+        // 「按名字找资产」的入口都产生歧义。先于本体落盘检查，失败不留半份文件。
+        if !req.name.trim().is_empty()
+            && let Some(existing) = self
+                .store
+                .alive_by_name(req.name.trim())
+                .await?
+                .into_iter()
+                .next()
+        {
+            return Err(service_err(
+                "archive",
+                &format!(
+                    "显示名「{}」已被资产（id={}）占用；请换一个名字",
+                    existing.name, existing.id
+                ),
+            ));
+        }
 
         if let Some(file) = prepared.as_ref() {
             // 文件资产：按 manifest 把 CAS 内容物化到 resources/，不再走 copy_in 复制草稿。

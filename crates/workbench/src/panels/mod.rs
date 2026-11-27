@@ -189,7 +189,8 @@ impl SidebarPanel {
         };
         let read_only = self.shared.project_ui.borrow().read_only;
         let state = VersionDialogState::new();
-        state.set_read_only(read_only);
+        state.set_read_only(read_only || rows.global);
+        state.set_global_scope(rows.global);
         state.set_rows(rows.seed.rows.clone());
 
         let resource_id = rows.resource_id.clone();
@@ -199,6 +200,7 @@ impl SidebarPanel {
             flow.session = Some(shared::VersionDialogSession {
                 resource_id: resource_id.clone(),
                 state: state.clone(),
+                global: rows.global,
             });
         }
 

@@ -542,3 +542,64 @@ async fn t132_file_meta_roundtrip_and_single_active_lease() {
 
     let _ = fs::remove_dir_all(&dir).await;
 }
+
+#[tokio::test]
+async fn alive_display_name_is_unique_across_archive_and_rename() {
+    let (service, dir) = test_service().await;
+    let first_draft = write_draft(&dir, "first.sql", b"select 1;").await;
+    let second_draft = write_draft(&dir, "second.sql", b"select 2;").await;
+
+    let mut first = archive_req(&first_draft, "reports/first.sql", None);
+    first.name = "同名档案".to_string();
+    let archived = service.archive(first).await.expect("first archive");
+
+    let mut second = archive_req(&second_draft, "reports/second.sql", None);
+    second.name = "同名档案".to_string();
+    let error = service
+        .archive(second)
+        .await
+        .expect_err("同名首次归档必须被拒绝");
+    assert!(
+        error.to_string().contains("显示名"),
+        "拒绝理由要说明名字冲突，实际：{error}"
+    );
+    assert!(second_draft.exists(), "名字检查必须先于消费草稿，失败不能吃掉文件");
+
+    // 改名同样不能把两条存活资产变成同名。
+    let third_draft = write_draft(&dir, "third.sql", b"select 3;").await;
+    let mut third = archive_req(&third_draft, "reports/third.sql", None);
+    third.name = "另一个名字".to_string();
+    let other = service.archive(third).await.expect("third archive");
+    let rename_error = service
+        .store()
+        .rename_resource(&other.resource_id, "同名档案")
+        .await
+        .expect_err("改名撞已有显示名必须被拒绝");
+    assert!(
+        rename_error.to_string().contains("显示名"),
+        "改名拒绝理由要说明名字冲突，实际：{rename_error}"
+    );
+    assert_eq!(
+        service
+            .store()
+            .get_resource_by_id(&other.resource_id)
+            .await
+            .expect("row")
+            .name,
+        "另一个名字",
+        "失败的改名不能留下半截状态"
+    );
+    assert_eq!(
+        service
+            .store()
+            .alive_by_name("同名档案")
+            .await
+            .expect("by name")
+            .len(),
+        1,
+        "同名档案只应有一条存活行"
+    );
+    assert_eq!(archived.version, 1);
+
+    let _ = fs::remove_dir_all(&dir).await;
+}

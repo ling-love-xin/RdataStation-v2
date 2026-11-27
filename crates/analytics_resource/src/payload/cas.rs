@@ -11,7 +11,9 @@
 //! 第一版按整文件存 blob，不做 CDC 分块；`chunks/` 留作后续替换 `put_file` 内部实现，
 //! manifest 的对外语义不变。
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use tokio::fs;
@@ -33,6 +35,24 @@ const HASH_CHUNK: usize = 64 * 1024;
 pub struct CasObject {
     pub hash: String,
     pub size: u64,
+}
+
+/// CAS 垃圾回收统计（mark-sweep：先保留仍被版本行引用的 manifest 及其 blob）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CasGcReport {
+    pub manifests_removed: usize,
+    pub blobs_removed: usize,
+    pub staging_removed: usize,
+    pub bytes_freed: u64,
+}
+
+impl CasGcReport {
+    pub fn merge(&mut self, other: Self) {
+        self.manifests_removed += other.manifests_removed;
+        self.blobs_removed += other.blobs_removed;
+        self.staging_removed += other.staging_removed;
+        self.bytes_freed += other.bytes_freed;
+    }
 }
 
 /// CAS 存储（按项目根实例化，不放进程单例）。
@@ -391,6 +411,100 @@ impl CasStore {
         })
     }
 
+    /// mark-sweep：`keep_manifests` 是仍被版本行引用的 manifest id。
+    ///
+    /// 规则：
+    /// - 被引用的 manifest 一定保留，并把它的 root / 每个条目 hash 加进 blob 保留集；
+    /// - 没被引用但未超过 grace 的 manifest 也保留（可能还有并发读 / 崩溃恢复要用），
+    ///   其 blob 一并与保留集合并；
+    /// - 超过 grace 的孤儿 manifest 先删，之后不在保留集的 blob 才删。
+    /// 解析失败的 manifest 一律保留（不把不确定的引用当成孤儿）。
+    pub fn gc(&self, keep_manifests: &HashSet<String>, grace: Duration) -> CasGcReport {
+        let mut report = CasGcReport::default();
+        let mut keep_blobs: HashSet<String> = HashSet::new();
+
+        let manifests_dir = self.manifests_dir();
+        if let Ok(buckets) = std::fs::read_dir(&manifests_dir) {
+            for bucket in buckets.flatten() {
+                let bucket_path = bucket.path();
+                if !bucket_path.is_dir() {
+                    continue;
+                }
+                let Ok(files) = std::fs::read_dir(&bucket_path) else {
+                    continue;
+                };
+                for file in files.flatten() {
+                    let path = file.path();
+                    let Some(manifest_id) = path
+                        .file_stem()
+                        .map(|stem| stem.to_string_lossy().to_string())
+                    else {
+                        continue;
+                    };
+                    let referenced = keep_manifests.contains(&manifest_id);
+                    if !referenced && older_than(&path, grace) {
+                        if std::fs::remove_file(&path).is_ok() {
+                            report.manifests_removed += 1;
+                        }
+                        continue;
+                    }
+                    // 被引用 / 尚在 grace 内的 manifest：读出来把内容对象加入保留集。
+                    let Ok(text) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    let Ok(manifest) = serde_json::from_str::<FileManifest>(&text) else {
+                        continue;
+                    };
+                    if manifest.validate().is_err() {
+                        continue;
+                    }
+                    keep_blobs.insert(manifest.root_hash.clone());
+                    for entry in &manifest.entries {
+                        keep_blobs.insert(entry.hash.clone());
+                    }
+                }
+            }
+        }
+
+        let blobs_dir = self.blobs_dir();
+        if let Ok(buckets) = std::fs::read_dir(&blobs_dir) {
+            for bucket in buckets.flatten() {
+                let bucket_path = bucket.path();
+                if !bucket_path.is_dir() {
+                    continue;
+                }
+                let Ok(files) = std::fs::read_dir(&bucket_path) else {
+                    continue;
+                };
+                for file in files.flatten() {
+                    let path = file.path();
+                    let Some(hash) = path.file_name().map(|name| name.to_string_lossy().to_string())
+                    else {
+                        continue;
+                    };
+                    if keep_blobs.contains(&hash) || !older_than(&path, grace) {
+                        continue;
+                    }
+                    let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+                    if std::fs::remove_file(&path).is_ok() {
+                        report.blobs_removed += 1;
+                        report.bytes_freed += size;
+                    }
+                }
+            }
+        }
+
+        if let Ok(files) = std::fs::read_dir(self.staging_dir()) {
+            for file in files.flatten() {
+                let path = file.path();
+                if older_than(&path, grace) && std::fs::remove_file(&path).is_ok() {
+                    report.staging_removed += 1;
+                }
+            }
+        }
+        report
+    }
+
     fn new_staging_path(&self) -> PathBuf {
         self.staging_dir()
             .join(format!("{}.tmp", uuid::Uuid::new_v4().simple()))
@@ -422,6 +536,14 @@ async fn hash_file(path: &Path) -> Result<String, CoreError> {
         hasher.update(&buf[..read]);
     }
     Ok(hex::encode(hasher.finalize()))
+}
+
+fn older_than(path: &Path, grace: Duration) -> bool {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_none_or(|age| age >= grace)
 }
 
 pub fn sha256_bytes(bytes: &[u8]) -> String {
@@ -506,6 +628,34 @@ mod tests {
             .unwrap()
             .count();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn gc_keeps_referenced_manifest_and_reclaims_orphan_objects() {
+        let dir = temp_root();
+        let cas = CasStore::new(dir.path());
+        let kept_src = dir.path().join("keep.csv");
+        std_fs::write(&kept_src, b"a,b\n1,2\n").unwrap();
+        let kept = cas.put_file(&kept_src).await.unwrap();
+        let kept_manifest =
+            FileManifest::single_file("keep.csv", kept.hash.clone(), kept.size, None);
+        let kept_id = cas.put_manifest(&kept_manifest).await.unwrap();
+
+        let orphan_src = dir.path().join("orphan.csv");
+        std_fs::write(&orphan_src, b"x,y\n9,8\n").unwrap();
+        let orphan = cas.put_file(&orphan_src).await.unwrap();
+        let orphan_manifest =
+            FileManifest::single_file("orphan.csv", orphan.hash.clone(), orphan.size, None);
+        let orphan_id = cas.put_manifest(&orphan_manifest).await.unwrap();
+
+        let keep: HashSet<String> = [kept_id.clone()].into_iter().collect();
+        let report = cas.gc(&keep, Duration::ZERO);
+        assert_eq!(report.manifests_removed, 1);
+        assert_eq!(report.blobs_removed, 1);
+        assert!(cas.read_manifest(&kept_id).await.is_ok());
+        assert!(cas.blob_path(&kept.hash).unwrap().is_file());
+        assert!(cas.read_manifest(&orphan_id).await.is_err());
+        assert!(!cas.blob_path(&orphan.hash).unwrap().is_file());
     }
 
     #[tokio::test]

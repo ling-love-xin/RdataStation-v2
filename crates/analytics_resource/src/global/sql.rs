@@ -29,7 +29,7 @@ impl GlobalInstanceStore {
     }
 
     /// 全局 DuckDB 操作（懒加载仅测试路径；生产连接由 `production()` 注入）。
-    pub(super) async fn with_duckdb<T>(
+    pub(crate) async fn with_duckdb<T>(
         &self,
         f: impl FnOnce(&mut duckdb::Connection) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {

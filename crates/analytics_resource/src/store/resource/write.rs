@@ -173,6 +173,27 @@ impl AnalyticsResourceStore {
                 "全局引用资产不能改本名，只能在项目里改别名",
             ));
         }
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(persistence_err("rename", "显示名不能为空"));
+        }
+        // 存活资产内显示名唯一：改名撞到别人就停在这里，不把两条行变成同名。
+        let same_name: Option<String> = match inner.query_row(
+            "SELECT id FROM analytics_resources \
+             WHERE name = ?1 AND id <> ?2 AND deleted_at IS NULL LIMIT 1",
+            rusqlite::params![name, id],
+            |row| row.get(0),
+        ) {
+            Ok(conflict) => Some(conflict),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(persistence_err("rename_check_name", e)),
+        };
+        if let Some(conflict) = same_name {
+            return Err(persistence_err(
+                "rename",
+                &format!("显示名「{name}」已被资产（id={conflict}）占用"),
+            ));
+        }
         let affected = inner
             .execute(
                 "UPDATE analytics_resources SET name = ? WHERE id = ? AND deleted_at IS NULL",

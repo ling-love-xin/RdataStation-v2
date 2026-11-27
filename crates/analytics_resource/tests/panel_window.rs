@@ -182,6 +182,7 @@ impl ResourcesHost for RecordingHost {
     fn request_restore_global_previous(
         &self,
         detail: &ArchiveDetail,
+        _from: Option<i32>,
         _window: &mut Window,
         _cx: &mut App,
     ) {
@@ -1709,6 +1710,7 @@ fn detail_preview_block_renders_text_or_says_why_not(cx: &mut TestAppContext) {
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1732,6 +1734,7 @@ fn detail_preview_block_renders_text_or_says_why_not(cx: &mut TestAppContext) {
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1793,6 +1796,7 @@ fn detail_version_timeline_puts_current_first(cx: &mut TestAppContext) {
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1923,6 +1927,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1950,6 +1955,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
                 host: host.clone(),
                 read_only: true,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -1971,6 +1977,7 @@ fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppCont
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -2000,6 +2007,7 @@ fn detail_tag_chips_render_with_actions_only_when_writable(cx: &mut TestAppConte
                 host: host.clone(),
                 read_only: false,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });
@@ -2025,6 +2033,7 @@ fn detail_tag_chips_render_with_actions_only_when_writable(cx: &mut TestAppConte
                 host: host.clone(),
                 read_only: true,
                 selected_ids: Vec::new(),
+                selected_version: None,
             }),
         }
     });

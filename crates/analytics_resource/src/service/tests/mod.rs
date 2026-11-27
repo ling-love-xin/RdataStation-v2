@@ -33,7 +33,12 @@ pub(super) fn archive_req(source: &std::path::Path, rel: &str, existing: Option<
     ArchiveRequest {
         source_path: source.to_path_buf(),
         rel_path: rel.to_string(),
-        name: "dau_report".to_string(),
+        // 渲染测试与 UI 一致：默认显示名取文件名（存活资产同名会被拒，测试不能全叫一个名字）。
+        name: std::path::Path::new(rel)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("dau_report")
+            .to_string(),
         alias: None,
         kind: ArchiveKind::File,
         // 大多数服务用例是文件型归档；分析表那条路见 `archive_analysis_req`。

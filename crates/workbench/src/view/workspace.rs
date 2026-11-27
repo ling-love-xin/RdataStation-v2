@@ -265,6 +265,9 @@ impl WorkbenchView {
                             match outcome {
                                 ArchiveTableOutcome::Done { notice } => {
                                     this.shared.say(notice, cx);
+                                    // 表资产也进资产面板：先让桥重新取一次快照，
+                                    // 数据对象面板在下一帧按 epoch 自动跟着刷新。
+                                    this.shared.refresh_resources(cx);
                                     if let Some(tab) = this.right_data_objects_tab.clone() {
                                         tab.update(cx, |tab, cx| tab.refresh(cx));
                                     }

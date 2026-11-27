@@ -92,6 +92,8 @@ pub struct VersionDialogState {
     busy: Rc<Cell<bool>>,
     /// 项目只读：三个动作全部置灰（判定与面板 / 详情同一口径：由宿主机注入）。
     read_only: Rc<Cell<bool>>,
+    /// 全局实例行：本地没有副本，动作栏额外抑制「用 vN 分析」（它按项目表名路由）。
+    global_scope: Rc<Cell<bool>>,
     /// 动作期间的提示（"正在还原 v1…"）；`None` = 不显示。
     note: Rc<RefCell<Option<String>>>,
 }
@@ -110,6 +112,7 @@ impl VersionDialogState {
             diff_base: Rc::new(RefCell::new(None)),
             busy: Rc::new(Cell::new(false)),
             read_only: Rc::new(Cell::new(false)),
+            global_scope: Rc::new(Cell::new(false)),
             note: Rc::new(RefCell::new(None)),
         }
     }
@@ -198,6 +201,15 @@ impl VersionDialogState {
 
     pub fn read_only(&self) -> bool {
         self.read_only.get()
+    }
+
+    /// 打开前由宿主告知这是全局实例行（动作栏只保留对比，不摆项目侧动作）。
+    pub fn set_global_scope(&self, global_scope: bool) {
+        self.global_scope.set(global_scope);
+    }
+
+    pub fn global_scope(&self) -> bool {
+        self.global_scope.get()
     }
 
     pub fn set_note(&self, note: Option<String>) {

@@ -301,7 +301,9 @@ pub(super) fn action_bar(
         !busy && !row.is_current && row.has_copy
     };
     // 「用这一版分析」= 把历史副本挂成分析视图（只读查看：不写库、不动本体，只读项目也能用）。
-    let can_analyze = !busy && !row.is_current && row.has_copy && !row.is_table;
+    // 全局实例行没有项目表名，分析入口按项目库路由，必须抑制。
+    let can_analyze =
+        !busy && !row.is_current && row.has_copy && !row.is_table && !state.global_scope();
     // 引用资产没有本地副本，只有「固化」：复制 pin 住的全局版本为独立本地表。
     let can_solidify = row.is_global_ref && !busy && !read_only;
     // 取回基于 `resources/` 下的本体，表型资产没有。
@@ -314,6 +316,8 @@ pub(super) fn action_bar(
         } else {
             "这个基准没有可读内容（内容已裁除），Shift+点另一行换一个基准"
         }
+    } else if state.global_scope() {
+        "这是全局实例的版本历史（只读）：可以 Shift+点另一行做版本对比；还原 / 取回 / 固化都只在项目实例里进行"
     } else if row.is_global_ref {
         if read_only {
             "项目处于只读模式：固化会往本项目库写一张新表，需要先退出只读"

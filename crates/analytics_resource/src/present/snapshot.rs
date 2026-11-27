@@ -15,6 +15,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         history_counts,
         recent_versions,
         restorable_versions,
+        table_versions,
         tags: tags_by_resource,
         tag_dictionary,
         folders: folders_by_resource,
@@ -53,6 +54,21 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
             },
         }
         let history_count = history_counts.get(&resource.id).copied().unwrap_or(0);
+        // 项目表资产的版本链只认 `table_asset_versions`；资源版本表不写表快照。
+        // 表型有链时用链长算历史数，避免详情说“0 个历史版本”却又能打开版本列表。
+        let project_table_versions = if row.kind == ArchiveKind::AnalyticsTable {
+            table_versions.get(&resource.id).cloned().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let history_count = if project_table_versions.is_empty() {
+            history_count
+        } else {
+            project_table_versions
+                .iter()
+                .filter(|version| version.version < resource.version)
+                .count() as i64
+        };
         // 「最近 3 条」明细：同一批取数（`recent_versions_by_resource`）按行给，
         // 没有历史的存档拿到空切片 → 详情只留「只有当前版本」一行。
         let recent = recent_versions
@@ -91,7 +107,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
                 dispatch_label: String::new(),
                 // `None` = 这一行没问到副本清单（不是“一份都没有”）。
                 restorable_versions: restorable_versions.get(&resource.id).cloned(),
-                table_versions: Vec::new(),
+                table_versions: project_table_versions,
                 file_versions: Vec::new(),
             },
         );

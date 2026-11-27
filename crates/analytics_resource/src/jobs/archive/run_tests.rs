@@ -24,7 +24,11 @@ fn archive_job(root: &Path, source: PathBuf, rel: &str) -> ArchiveJob {
         request: ArchiveRequest {
             source_path: source,
             rel_path: rel.to_string(),
-            name: "dau".to_string(),
+            name: Path::new(rel)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("dau")
+                .to_string(),
             alias: None,
             kind: ArchiveKind::File,
             payload_mode: PayloadMode::Copy,

@@ -12,15 +12,36 @@ use tokio::fs;
 use shared::error::{CommonError, CoreError, StorageError};
 
 use crate::payload::PayloadStore;
-use crate::payload::cas::CasStore;
+use crate::payload::cas::{CasGcReport, CasStore};
 use crate::payload::manifest::FileManifest;
 
 use super::*;
 
 impl GlobalInstanceStore {
     /// 全局 CAS：`{system}/cas/`（不是项目布局 `{root}/.RSmeta/cas`）。
-    fn file_cas(&self) -> CasStore {
+    pub(crate) fn file_cas(&self) -> CasStore {
         CasStore::at_root(self.system_dir.join("cas"))
+    }
+
+    /// 全局文件 CAS 的 mark-sweep：保留仍被任一 `file_asset_versions` 行引用的 manifest，
+    /// 其余超过 grace 的孤儿对象释放。表不看 CAS（表快照由 `table_gc` 回收）。
+    pub(crate) fn gc_file_cas(
+        &self,
+        grace: std::time::Duration,
+    ) -> Result<CasGcReport, CoreError> {
+        let keep: std::collections::HashSet<String> = self.with_sqlite(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT manifest_id FROM file_asset_versions")
+                .map_err(sqlite_err("prepare_gc_global_file_cas"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(sqlite_err("query_gc_global_file_cas"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err("collect_gc_global_file_cas"))
+        })?
+        .into_iter()
+        .collect();
+        Ok(self.file_cas().gc(&keep, grace))
     }
 
     /// 发布项目文件到全局（file-first）。base 不匹配只报冲突，不覆盖。

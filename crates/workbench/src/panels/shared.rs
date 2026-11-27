@@ -113,6 +113,8 @@ pub struct ResourcesBridge {
 pub struct VersionDialogSession {
     pub resource_id: String,
     pub state: VersionDialogState,
+    /// 数据来自全局实例：动作栏按只读收敛。
+    pub global: bool,
 }
 
 /// M6：版本历史对话框的流转状态（待开 → 已开 → 关闭）。

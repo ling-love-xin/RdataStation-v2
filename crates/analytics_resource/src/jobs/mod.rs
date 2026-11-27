@@ -19,6 +19,7 @@
 
 mod archive;
 pub(crate) mod global;
+mod file_gc;
 mod index;
 mod refresh;
 mod rename;
@@ -509,7 +510,7 @@ fn maybe_run_table_gc(rt: &tokio::runtime::Runtime, project_root: Option<PathBuf
         }
         *last = Some(now);
     }
-    let report = rt.block_on(run_table_gc(project_root, table_gc::GC_GRACE));
+    let report = rt.block_on(run_table_gc(project_root.clone(), table_gc::GC_GRACE));
     if report.dropped > 0 || report.failed > 0 {
         tracing::info!(
             marked = report.marked,
@@ -517,6 +518,18 @@ fn maybe_run_table_gc(rt: &tokio::runtime::Runtime, project_root: Option<PathBuf
             kept = report.kept,
             failed = report.failed,
             "表快照 GC 完成"
+        );
+    }
+    // 同一节流拍里顺带回收文件 CAS：两者共用 24h grace，孤儿 manifest 被版本行
+    // 引用时永不删，所以不需要比表 GC 更频繁。
+    let cas = rt.block_on(file_gc::run_file_gc(project_root, table_gc::GC_GRACE));
+    if cas.manifests_removed > 0 || cas.blobs_removed > 0 || cas.staging_removed > 0 {
+        tracing::info!(
+            manifests = cas.manifests_removed,
+            blobs = cas.blobs_removed,
+            staging = cas.staging_removed,
+            bytes = cas.bytes_freed,
+            "文件 CAS GC 完成"
         );
     }
 }

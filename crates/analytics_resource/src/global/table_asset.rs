@@ -311,7 +311,7 @@ impl GlobalInstanceStore {
     }
 
     /// 读一份全局 manifest。
-    pub(super) fn global_table_manifest(
+    pub(crate) fn global_table_manifest(
         &self,
         manifest_id: &str,
     ) -> Result<Option<TableManifest>, InstanceOpError> {
@@ -341,7 +341,7 @@ impl GlobalInstanceStore {
     }
 
     /// 读一份全局快照。
-    pub(super) fn global_table_snapshot(
+    pub(crate) fn global_table_snapshot(
         &self,
         snapshot_id: &str,
     ) -> Result<Option<TableSnapshot>, InstanceOpError> {

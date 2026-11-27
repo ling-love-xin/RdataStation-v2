@@ -220,7 +220,7 @@ impl GlobalInstanceStore {
             None => None,
         };
 
-        let (manifest, snapshot) = self
+        let (manifest, snapshot, snapshot_created) = self
             .with_duckdb(|conn| {
                 conn.execute_batch(&format!(
                     "CREATE SCHEMA IF NOT EXISTS {}.{};",
@@ -268,6 +268,7 @@ impl GlobalInstanceStore {
                             physical_schema: snapshot.physical_schema,
                             physical_table: snapshot.physical_table,
                         },
+                        false,
                     ));
                 }
                 Ok((
@@ -278,6 +279,7 @@ impl GlobalInstanceStore {
                         physical_schema: super::table_asset::GLOBAL_ARCHIVE_SCHEMA.to_string(),
                         physical_table,
                     },
+                    true,
                 ))
             })
             .await?;
@@ -302,7 +304,7 @@ impl GlobalInstanceStore {
             }
         }
 
-        let outcome = match head {
+        let outcome = match match head {
             Some(head) => self.append_global_table_version(
                 &head,
                 req,
@@ -310,7 +312,7 @@ impl GlobalInstanceStore {
                 &manifest,
                 &snapshot,
                 overwrite,
-            )?,
+            ),
             None => {
                 let mut outcome = self.insert_global_table_asset(
                     &req.name,
@@ -320,7 +322,33 @@ impl GlobalInstanceStore {
                     &snapshot,
                 )?;
                 outcome.overwritten = overwrite;
-                outcome
+                Ok::<PromoteOutcome, InstanceOpError>(outcome)
+            }
+        } {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if snapshot_created {
+                    if let Err(cleanup) = self
+                        .with_duckdb(|conn| {
+                            conn.execute_batch(&format!(
+                                "DROP TABLE IF EXISTS {}.{}.{};",
+                                quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+                                quote_ident(&snapshot.physical_schema),
+                                quote_ident(&snapshot.physical_table),
+                            ))
+                            .map(|_| ())
+                            .map_err(|e| duckdb_err("drop_orphan_global_snapshot", &e.to_string()))
+                        })
+                        .await
+                    {
+                        tracing::error!(
+                            error = %cleanup,
+                            table = %snapshot.physical_table,
+                            "全局文件表登记失败后回滚新建快照失败（GC 会按无引用回收）"
+                        );
+                    }
+                }
+                return Err(error);
             }
         };
         if let Some(keep) = req.keep_versions {
@@ -405,7 +433,7 @@ impl GlobalInstanceStore {
         };
 
         // ---- 读 manifest + 需要时冻结快照 ----
-        let (manifest, snapshot) = self
+        let (manifest, snapshot, snapshot_created) = self
             .with_duckdb(|conn| {
                 conn.execute_batch(&format!(
                     "CREATE SCHEMA IF NOT EXISTS {}.{};",
@@ -421,12 +449,15 @@ impl GlobalInstanceStore {
                     table_exists_in(conn, &snapshot.physical_schema, &snapshot.physical_table)
                 });
                 let snapshot = match reusable {
-                    Some(snapshot) => NewTableSnapshot {
-                        snapshot_id: snapshot.snapshot_id,
-                        instance: SnapshotInstance::Global,
-                        physical_schema: snapshot.physical_schema,
-                        physical_table: snapshot.physical_table,
-                    },
+                    Some(snapshot) => (
+                        NewTableSnapshot {
+                            snapshot_id: snapshot.snapshot_id,
+                            instance: SnapshotInstance::Global,
+                            physical_schema: snapshot.physical_schema,
+                            physical_table: snapshot.physical_table,
+                        },
+                        false,
+                    ),
                     None => {
                         let snapshot_id = format!("tsnap_{}", uuid::Uuid::new_v4().simple());
                         let physical_table = snapshot_table_name(&snapshot_id);
@@ -439,15 +470,19 @@ impl GlobalInstanceStore {
                         conn.execute_batch(&create_sql).map_err(|e| {
                             duckdb_err("create_global_table_snapshot", &e.to_string())
                         })?;
-                        NewTableSnapshot {
-                            snapshot_id,
-                            instance: SnapshotInstance::Global,
-                            physical_schema: super::table_asset::GLOBAL_ARCHIVE_SCHEMA.to_string(),
-                            physical_table,
-                        }
+                        (
+                            NewTableSnapshot {
+                                snapshot_id,
+                                instance: SnapshotInstance::Global,
+                                physical_schema: super::table_asset::GLOBAL_ARCHIVE_SCHEMA
+                                    .to_string(),
+                                physical_table,
+                            },
+                            true,
+                        )
                     }
                 };
-                Ok((manifest, snapshot))
+                Ok((manifest, snapshot.0, snapshot.1))
             })
             .await?;
 
@@ -472,7 +507,7 @@ impl GlobalInstanceStore {
             }
         }
 
-        let outcome = match head {
+        let outcome = match match head {
             Some(head) => self.append_global_table_version(
                 &head,
                 req,
@@ -480,7 +515,7 @@ impl GlobalInstanceStore {
                 &manifest,
                 &snapshot,
                 overwrite,
-            )?,
+            ),
             None => {
                 let mut outcome = self.insert_global_table_asset(
                     &req.name,
@@ -490,7 +525,34 @@ impl GlobalInstanceStore {
                     &snapshot,
                 )?;
                 outcome.overwritten = overwrite;
-                outcome
+                Ok::<PromoteOutcome, InstanceOpError>(outcome)
+            }
+        } {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                // 登记失败但物理快照是本次新建的：不留“表在、资产不在”的半成品。
+                if snapshot_created {
+                    if let Err(cleanup) = self
+                        .with_duckdb(|conn| {
+                            conn.execute_batch(&format!(
+                                "DROP TABLE IF EXISTS {}.{}.{};",
+                                quote_ident(shared::duckdb_root::GLOBAL_ALIAS),
+                                quote_ident(&snapshot.physical_schema),
+                                quote_ident(&snapshot.physical_table),
+                            ))
+                            .map(|_| ())
+                            .map_err(|e| duckdb_err("drop_orphan_global_snapshot", &e.to_string()))
+                        })
+                        .await
+                    {
+                        tracing::error!(
+                            error = %cleanup,
+                            table = %snapshot.physical_table,
+                            "全局表登记失败后回滚新建快照失败（GC 会按无引用回收）"
+                        );
+                    }
+                }
+                return Err(error);
             }
         };
 

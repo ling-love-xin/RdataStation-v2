@@ -412,10 +412,17 @@ impl SidebarPanel {
         // 无论成败都要收掉"加载中"：失败时停在加载态比给出提示更糟（用户会一直等）。
         panel.update(cx, |panel, cx| panel.set_loading(false, cx));
         match result {
-            Ok(snapshot) => panel.update(cx, |panel, cx| {
-                panel.set_notice(None, cx);
-                panel.set_snapshot(snapshot, cx);
-            }),
+            Ok(snapshot) => {
+                panel.update(cx, |panel, cx| {
+                    panel.set_notice(None, cx);
+                    panel.set_snapshot(snapshot, cx);
+                });
+                // 资产是数据对象清单的一段：新快照落地后声明清单过期，
+                // 否则归档回执里先刷的数据对象面板会一直停在旧快照（表资产不可见）。
+                self.shared
+                    .data_objects_epoch
+                    .set(self.shared.data_objects_epoch.get().wrapping_add(1));
+            }
             Err(err) => panel.update(cx, |panel, cx| panel.set_notice(Some(err), cx)),
         }
     }
