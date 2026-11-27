@@ -297,37 +297,4 @@ impl AnalyticsResourceStore {
     pub async fn remove_orphan_record(&self, id: &str) -> Result<(), CoreError> {
         self.hard_delete_row(id).await
     }
-
-    /// 按名字清掉**同一条版本链**的全部登记行（活跃行硬删、软删行按回收站永久删除）。
-    ///
-    /// 文件资产「解锁退回草稿箱」用：本体已经移出 `resources/`，登记、版本快照与历史行
-    /// 若还留着，会变成一条再也指不到文件的幽灵链。返回清掉的行数。
-    pub async fn purge_name_chain(&self, name: &str, scope: &str) -> Result<usize, CoreError> {
-        let rows: Vec<(String, bool)> = {
-            let conn = self.get_conn().await?;
-            let inner = conn.inner()?;
-            let mut stmt = inner
-                .prepare(
-                    "SELECT id, deleted_at IS NOT NULL FROM analytics_resources \
-                     WHERE name = ?1 AND scope = ?2",
-                )
-                .map_err(|e| persistence_err("prepare_purge_name_chain", e))?;
-            let rows = stmt
-                .query_map(rusqlite::params![name, scope], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
-                })
-                .map_err(|e| persistence_err("query_purge_name_chain", e))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| persistence_err("collect_purge_name_chain", e))?
-        };
-        let count = rows.len();
-        for (id, deleted) in rows {
-            if deleted {
-                self.purge_deleted_row(&id).await?;
-            } else {
-                self.hard_delete_row(&id).await?;
-            }
-        }
-        Ok(count)
-    }
 }

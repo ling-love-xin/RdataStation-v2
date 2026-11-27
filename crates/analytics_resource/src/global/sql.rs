@@ -90,6 +90,7 @@ impl GlobalInstanceStore {
     }
 
     /// 删掉指定 schema 下的全局表（快照在 `rds_archive`）。
+    #[cfg(test)]
     pub(super) async fn drop_global_archive_table(
         &self,
         schema: &str,
@@ -220,7 +221,8 @@ impl GlobalInstanceStore {
         Ok(removed)
     }
 
-    /// 统计全局表行数 / 列数（升级与分发共用；参数是实际表名，可带 `schema.table`）。
+    /// 统计全局表行数 / 列数（仅测试断言用；生产路径走 `project_table_stats`）。
+    #[cfg(test)]
     pub(super) async fn table_stats(
         &self,
         name: &str,
