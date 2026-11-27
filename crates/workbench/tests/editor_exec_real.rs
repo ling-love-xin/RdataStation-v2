@@ -1304,11 +1304,19 @@ fn check_accelerated_channel(
     assert_eq!(value[0].rows[0][0], "42");
     eprintln!("✅ 本地加速：本地临时对象可用（会话变量）");
 
-    // ⑤：源库新建的表要「重新挂载」才看得见（数据实时、表清单在 ATTACH 时定型）
+    // ⑤：源端新建的表在旧 ATTACH 会话里的可见性（刀43 真机实证：实时可见）
     let late_table = "rds_accel_late";
     shared.update(|service| {
         service.set_channel(&document, editor::channel::ExecChannel::Source);
     });
+    // 幂等：上一次跑可能把这张表留在源库里
+    let _ = run_through_editor(
+        &shared,
+        document.clone(),
+        &ExecTarget::Statement(format!("DROP TABLE IF EXISTS mysql.{late_table}")),
+        ResultPlacement::Replace,
+        1,
+    );
     let created = run_through_editor(
         &shared,
         document.clone(),
@@ -1331,9 +1339,14 @@ fn check_accelerated_channel(
         ResultPlacement::Replace,
         1,
     );
+    // ⑤：源端新建的表在旧 ATTACH 会话里**实时可见**（刀43 真机实证）。
+    // 原断言是「不该可见」——那只是预检把它拦下来的假象（预检看不到执行连接 / 源端后建的对象），
+    // 预检按「看不见 ≠ 不存在」放行后，DuckDB 实际查得到：`CREATE TABLE mysql.<t>` 之后
+    // 立刻 `count(*)` 成功。因此这里如实断言「可见」，不再用一条错的红线掩盖真实行为。
     assert!(
-        invisible[0].error.is_some(),
-        "ATTACH 之后新建的表在旧会话里不该可见（表清单是挂载时定型的）"
+        invisible[0].error.is_none(),
+        "源端新建的表在旧会话里应当可见（表清单不是挂载时定型）：{:?}",
+        invisible[0].error
     );
     // 菜单上的「重新挂载源库」走的就是这一条（旁路线程 + 回执）
     shared

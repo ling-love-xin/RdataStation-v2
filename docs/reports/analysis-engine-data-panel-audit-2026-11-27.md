@@ -289,6 +289,20 @@
 
 验收：`rds-driver --lib` **95 passed / 0 failed / 8 ignored**；`insight_source_real` MySQL 由 `Text` → **`Numeric`**，`2 passed`；`insight_editor_entry` 2 passed；`insight_schema_real` 1 passed；`editor_exec_real` 的 `SELECT 1 AS n` 由 `"true"` 回到 `"1"`，MySQL / PG 的 native 段（执行 / 批量 / 中断 / 事务 / 错误定位 / 计划 / 分段 / 影响行数 / 下发源库 / 历史 / 超时 / 切 schema）**全部 ✅**。
 
+**刀43：预检看不见连接级临时表 → 合法语句被拦（`editor_exec_real` 的另一条红）**
+
+真机链路（测试里临时插探针，跑完即撤）：
+
+1. `CREATE TEMP TABLE rds_accel_vars AS SELECT 42` 成功（`error` 为空）。
+2. 紧接着同一通道执行 `SELECT database_name, table_name FROM duckdb_tables() …` → 回 `[["rds_src","rds_accel_e2e"], ["temp","rds_accel_vars"]]` —— **表真实存在，执行连接看得见**。
+3. 但 `SELECT answer FROM rds_accel_vars` 被拦：`表「rds_accel_vars」不存在：已挂载的源里都没有这张表（现有别名：rds_src）`。
+
+根因：预检的事实来自 `Facts::capture → catalog::table_names → AnalysisInstance::catalog_table_names`，用的是实例的 **control 连接**；临时表是**连接级**的，只存在于执行连接。于是「看不见」被当成「不存在」。这也违反预检自己写在文件头的 §4 口径（「事实不足就不猜」）。
+
+修法（`crates/editor/src/exec/preflight.rs`）：`Facts::local_tables_visible()` —— 本机临时区（`temp` / `memory`）**列不列得出来**；裸名一个源都没命中时，若临时区不可见则**放行**（交给 DuckDB 执行时报原话），可见时才报「不存在」。新单测 `missing_bare_name_is_let_through_when_local_area_is_invisible`，并把 `missing_bare_name_names_the_aliases` 的世界补上可见的临时区（否则它也会走进放行分支）。`exec::preflight` **14 passed**；`rds-editor --lib` **891 passed / 0 failed / 4 ignored**。
+
+**连带发现（推翻了原用例的一条假设）**：预检放行后，`⑤ CREATE TABLE mysql.<t>` 之后立刻 `count(*)` **执行成功** —— 即「表清单在 ATTACH 时定型、必须重新挂载才看得见」这条假设在 DuckDB 2.0.1 + mysql 扩展下**不成立**（源端新建对象实时可见）。原断言 `error.is_some()` 一直是靠预检拦出来的假象。已按事实改写为「应当可见」，并给该段补 `DROP TABLE IF EXISTS` 前置（上一次跑会把表留在源库，导致重跑时 `CREATE` 报「已存在」——门控用例必须幂等）。`editor_exec_real` **3 passed / 0 failed / 19.22s**。
+
 ---
 
 ## 6. 打磨顺序（五刀，均不动架构）
@@ -364,9 +378,10 @@ cargo test -p rds-workbench --lib -- --list 2>$null | Out-File -Encoding utf8 .r
 
 | 刀42 | 2026-11-28 | 修 P0（本审计没看到的）：`mysql_native` 按**声明类型**出 Arrow，不再按行值猜。真机实证 `CAST(1 AS SIGNED)` / `DECIMAL` / `TINYINT` 全出 `Utf8`（`mysql_async` 文本协议把数值回成 `Value::Bytes`），导致洞察把 INT 判 Text、Decimal 降级判定与结果区列类型失真、取样临时表全 VARCHAR。改：`declared_arrow_type`（`ColumnType` → Arrow）、取值放宽到 `Bytes` 解析、**不做 0/1 判布尔启发**（会把 `count(*)` 得 `true`）。同时三个洞察真机套件在老驱动 id 上退到同族 `*_native`；`insight_editor_entry` 断言改读宿主待打开目标（源目标按设计不落右栏） | `rds-driver --lib` **95 passed**；gate engine **23/418/0**、database **5/332/0**、workbench **44/404/4**（8 红→4 红）；`insight_source_real` MySQL 由 Text→**Numeric** | 完成（P0 已修，真机验证） |
 
-**刀42 留下的红（未修，属下一刀）**
+| 刀43 | 2026-11-28 | `crates/editor/src/exec/preflight.rs` 加 `Facts::local_tables_visible()`：裸名一个源都没命中时，若本机临时区（`temp`/`memory`）**列不出来**就放行（看不见 ≠ 不存在，符合预检头部 §4 口径）——临时表是连接级的，预检的 control 连接看不到执行连接建的 `TEMP TABLE`（真机：`duckdb_tables()` 里确有 `temp.rds_accel_vars`）。同时按真机事实改写 `editor_exec_real` ⑤：源端新建表在旧 ATTACH 会话**实时可见**（原「不该可见」是预检拦出来的假象），并补 `DROP TABLE IF EXISTS` 让该段幂等 | `exec::preflight` **14 passed**（含新用例）；`rds-editor --lib` **891 / 0 / 4 ignored**；`editor_exec_real` **3 passed / 0 failed / 19.22s**；gate workbench **44 / 404 / 4**（4 红 = 2 条并行 analytics 线 + `zz_fixture_probe` 本地探针 + `mock_generator` 文件占用偶发） | 完成（真机验证） |
 
-- `editor_exec_real::the_editor_execution_port_runs_a_query_on_every_configured_database`：本地通道建 `TEMP TABLE` 成功，随后 `SELECT` 被**预检**拦成「表「rds_accel_vars」不存在：已挂载的源里都没有这张表」——预检不认本会话刚建的临时表；`check()` 只有 `Result<(), String>`，没有「警告不阻断」出口（与 30b 同一障碍）。
+**刀42 留下的红**（第 1 条已由刀43 修掉；其余不属本审计或 CI 不可见）
+- `editor_exec_real::the_editor_execution_port_runs_a_query_on_every_configured_database`：本地通道建 `TEMP TABLE` 成功，随后 `SELECT` 被**预检**拦成「表「rds_accel_vars」不存在：已挂载的源里都没有这张表」——预检不认本会话刚建的临时表；`check()` 只有 `Result<(), String>`，没有「警告不阻断」出口（与 30b 同一障碍）。**已由刀43 修掉**（见 §5 刀43：`local_tables_visible` 放行 + ⑤ 假设按真机改写）。
 - `data_source_lifecycle` / `ui_contract`：并行 analytics 线，不属本审计。
 - `zz_fixture_probe`：本地不入库探针（`ssl-mode` 参数不被识别），CI 无此文件。
 

@@ -5,7 +5,9 @@
 //! 1. **不改写 SQL**。预检只读名字、只报错，绝不把裸名补成别名（CTE / 子查询 / 动态 SQL
 //!    都会被文本重写弄坏）。
 //! 2. 未限定名按 search_path 解析：主源命中 → 就是它（不报歧义）；主源没命中而**多个源**
-//!    都有 → 报歧义并给候选；一个都没有 → 报不存在。
+//!    都有 → 报歧义并给候选；一个都没有 → 报不存在（**例外**：临时区列不出来时放行，
+//!    见 `Facts::local_tables_visible`——临时表是连接级的，预检的连接看不到执行连接的
+//!    临时表，看不见不等于不存在）。
 //! 3. 限定名：首段是已知别名时校验别名与其表；不是别名且只有两段 → 当 `schema.table`
 //!    放行（`main` / `rds_tmp` / 用户 schema，实例上没法在本地分清）；三段以上且首段
 //!    不是别名 → 报 catalog 不存在。
@@ -102,10 +104,27 @@ impl Facts {
             .map(|c| c.alias.as_str())
             .collect()
     }
+
+    /// 本机临时区（`temp` / `memory`）此刻**列不列得出来**。
+    ///
+    /// 临时表是连接级的：执行连接建的表，`control` 连接上的 `duckdb_tables()` 看不到。
+    /// 所以「临时区里没有这张表」有两种含义——**真的没有**，或者**根本看不见**。
+    /// 按本模块 §4「事实不足就不猜」：看不见时不能断言表不存在，交给 DuckDB 执行时报原话。
+    fn local_tables_visible(&self) -> bool {
+        self.catalogs
+            .iter()
+            .filter(|c| c.builtin && is_local_catalog(&c.alias))
+            .any(|c| !c.tables.is_empty())
+    }
 }
 
 /// DuckDB 自带的 catalog（与 `is_builtin_catalog` 同源，避免两处各写一份）
 const BUILTIN_CATALOGS: [&str; 3] = ["memory", "temp", "system"];
+
+/// 本机临时区：会话内的临时表落在这里（执行连接的 `temp` / `memory`）。
+fn is_local_catalog(name: &str) -> bool {
+    name.eq_ignore_ascii_case("temp") || name.eq_ignore_ascii_case("memory")
+}
 
 /// 本文档那条分析会话的主源（`None` = 没有主源 / 实例还没起）。
 ///
@@ -141,6 +160,10 @@ fn check_bare(name: &str, facts: &Facts) -> Result<(), String> {
         .filter(|c| c.unavailable.is_none() && c.has_table(name))
         .collect();
     if hits.is_empty() {
+        // 临时区看不见（连接级表只在执行连接里）：不能因为「我没看到」就说表不存在
+        if !facts.local_tables_visible() {
+            return Ok(());
+        }
         return Err(format!(
             "表「{name}」不存在：已挂载的源里都没有这张表（现有别名：{}）",
             facts.user_aliases().join("、")
@@ -243,10 +266,29 @@ mod tests {
 
     #[test]
     fn missing_bare_name_names_the_aliases() {
-        let world = facts(Some("shop"), vec![fact("shop", &["orders"])]);
+        // 临时区看得见（非空）→ 才能断言「哪里都没有这张表」
+        let world = facts(
+            Some("shop"),
+            vec![fact("shop", &["orders"]), builtin("temp", &["tmp_q_1"])],
+        );
         let error = duck("SELECT * FROM nope", &world).unwrap_err();
         assert!(error.contains("nope"));
         assert!(error.contains("shop"), "报错要给出可用的别名：{error}");
+    }
+
+    #[test]
+    fn missing_bare_name_is_let_through_when_local_area_is_invisible() {
+        // 临时表是连接级的：`control` 连接列不到执行连接的 `temp`（真机实证：
+        // `CREATE TEMP TABLE` 成功、`duckdb_tables()` 里也有 `temp.<name>`，但预检看不见）。
+        // 看不见 ≠ 不存在，按 §4 放行，让 DuckDB 执行时报原话。
+        let world = facts(
+            Some("shop"),
+            vec![fact("shop", &["orders"]), builtin("temp", &[])],
+        );
+        assert!(
+            duck("SELECT * FROM rds_accel_vars", &world).is_ok(),
+            "列不到临时区时不得把合法临时表拦成「不存在」"
+        );
     }
 
     #[test]
