@@ -111,13 +111,25 @@ graph LR
 
 | 时点 | 发生什么 | 在哪 |
 | --- | --- | --- |
-| 构造（`WorkbenchView::new(cx)`） | 装配 host；直读 `settings.json` 取排序；无项目时加载首屏列表 | 构造期（不在 render） |
+| 启动装配（`WorkbenchView::new(cx)`） | 解析会话（环境变量 → 设置「启动时恢复上次项目」→ 空态）→ **取写锁**（`open`；被另一实例占用则 `open_read_only`）→ 按**最终**作用域载连接 → 装配共享状态。取锁 / 载入失败**退回空态**：会话不保留，错误进欢迎页选择器（`picker.error`） | `crates/workbench/src/view/lifecycle.rs::new` / `StartupLock` |
+| 构造（启动副作用） | 项目名册**总是**预载一次（有项目时欢迎 tab 默认隐藏，但标题栏「回到欢迎页」与设置「项目」页都渲染这份列表）；洞察规则目录监听 | `lifecycle.rs::install_startup_side_effects` |
+| 构造其余部分 | 装配 host；直读 `settings.json` 取排序 | 构造期（不在 render） |
 | render | `render_picker` / `render_current_settings` 只读 state 并返回元素（后者只由设置页的注入面板调用，主窗口不再挂项目设置层）；标题栏菜单用 `build_project_menu` 产 `PopupMenu`（宿主 `Button::dropdown_menu` 只负责下拉宿主） | `WorkbenchView::render` |
 | 事件回调 | 动作函数（打开 / 关闭 / 增删改查 / 对话框提交）做 I/O 并 `host.notify` | 各处 `on_click` / `on_action` |
 | 对话框 | 由 `window.open_dialog` / `open_alert_dialog` 承载；关闭时机由提交结果决定 | 事件上下文 |
 | 对话框内容（builder 闭包） | builder 是**每帧重跑的渲染闭包**（vendor 契约：cheap and idempotent），因此只读 state + 输入框；唯一的 I/O（`location_hint` / `folder_hint` 的目录探测）按「位置 / 名称 / 路径」做**局部 memo**——统一走 `ui::memo_hint`（单测 `memo_hint_recomputes_only_when_key_changes` 锁住"同 key 不重算 / 换 key 必重算 / None 也缓存"） | `ui.rs::open_create_dialog` / `ui.rs::open_folder_dialog` |
 | 设置窗口里的项目列表 | 同一份 `render_picker`，作为 `SettingsHost::projects_panel`（`PanelRender`）每帧被设置页骨架调用：只读 state，不加载 / 不写；点击只投递 `HomeAction` 回主窗口 | `settings/src/skeleton.rs` 调面板；`crates/workbench/src/view/actions.rs::open_settings_at` 装配 |
 | 设置窗口里的当前项目设置 | `render_current_settings` 作为 `SettingsHost::project_settings_panel`（同类型别名）每帧被调用：有会话才返回块，无项目时宿主给一句占位；快照仍只在事件路径取（进「项目」节 / 保存 / 归档后） | 同上；快照取数在 `open_settings_at`（`section == Some("projects")`）与 `ui/actions.rs` 的保存 / 归档路径 |
+
+### 启动路径的可见状态（2026-11-27）
+
+启动装配只有 `cx`、拿不到 `Window`，所以状态**不能靠 toast**；三个落点各司其职：
+
+| 状态 | 落点 | 为什么是这里 |
+| --- | --- | --- |
+| 只读（写锁被另一实例占用 / 归档只读） | 标题栏项目槽的「只读」徽标 + tooltip；标题栏项目菜单的「只读：写操作不可用」说明行；设置「项目」页状态行「只读」+「只读（写操作已禁用）」；编辑器状态栏「连接只读」徽标 | `project_ui.notice` **只**在选择器里渲染，而有项目时欢迎 tab 默认隐藏——只写 notice 等于用户看不到 |
+| 启动取锁 / 载入失败 | 欢迎页选择器的错误行（`picker.error`，danger 色）；失败时**会话退回空态**，不保留一个"看似打开、实际没锁"的项目 | 启动路径没有交互式打开那套「仍要打开 / 只读打开」对话框，只能退回空态并说清原因 |
+| 连接清册加载失败 | 左 Dock「数据源连接」面板底部的 info 行（`Shared::notice`，`Shared::say` 回执） | 与连接相关的提示归连接面板，不混进项目状态 |
 
 ## 4. 对话框关闭时机（栈语义）
 
@@ -214,9 +226,10 @@ graph LR
 | workbench 侧桥接与装配 | `crates/workbench/src/components/project_host.rs` |
 | 会话类型与解析 | `crates/project/src/ui.rs`（`OpenProject`）、`crates/workbench/src/services/project_session.rs`（`resolve`） |
 | 共享状态字段 | `crates/workbench/src/panels/`（`Shared::{project, project_ui, editor_*}`） |
-| 标题栏项目槽 + 菜单 | `crates/workbench/src/view/dock.rs`（`render_title_bar`；`Button::dropdown_menu` + `project::ui::build_project_menu`） |
+| 标题栏项目槽 + 菜单 | `crates/workbench/src/view/dock.rs`（`render_title_bar`；项目槽在只读时挂「只读」徽标 + tooltip，有项目时接 `Button::dropdown_menu` + `project::ui::build_project_menu`） |
 | 菜单规格（顺序 / 文案 / 可用性） | `crates/project/src/ui.rs`（`project_menu_entries` 纯函数 + `attach_project_menu_handler`） |
 | 窗口测试 | `crates/project/src/ui/tests.rs` |
+| 启动装配取锁 / 回退（workbench 单测） | `crates/workbench/src/view/lifecycle.rs`（`acquire_startup_project` / `StartupLock` + 文件末尾 `mod tests` 两例） |
 | 视图测试规范 | `.agents/skills/gpui-kit-dev/SKILL.md`（「窗口测试」一节） |
 | 设置面板的磁盘 / 名册 / 默认连接 / 版本台账快照 | `crates/project/src/ui.rs`（`SettingsSnapshot` / `load_settings_snapshot` / `meta_tree_rows` / `set_default_connection` / `versions_view`；事件路径填充，render 纯读） |
 | 卡片命令（`⋯` 下拉与右键菜单） | `crates/project/src/ui.rs`（`card_menu_entries` 规格 + `card_menu` 渲染 + `attach_card_menu_handler`） |

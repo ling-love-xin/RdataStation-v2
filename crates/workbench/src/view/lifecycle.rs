@@ -4,6 +4,32 @@
 //! 私有方法提为 `pub(super)` 供 `view` 子模块互相调用。
 
 use super::*;
+/// 启动期取锁结果（与 `Shared` 解耦：先算结果，再装配共享状态）。
+///
+/// 启动装配顺序是「解析会话 → 取锁 → 按最终作用域载连接 → 装配 `Shared`」，
+/// 所以取锁结果必须先落在类型里，不能在中途直接写 `Shared`（此刻它还没建）。
+enum StartupLock {
+    /// 启动没有项目：欢迎页。
+    None,
+    /// 打开成功。`OpenedProject::read_only` 区分「正常持写锁」与「被占用 → 只读打开」，
+    /// 两者的锁 / 提示差异由 [`WorkbenchView::apply_startup_lock`] 落进共享状态。
+    /// 装进 `Box`：本项目 + store + 锁约有 640 字节，而 `Failed` 只有一条文案——
+    /// 启动只走一次，指针跳一下比让整个枚举都撑到 640 字节划算（`large_enum_variant`）。
+    Opened(Box<project::service::OpenedProject>),
+    /// 取锁 / 载入失败：**不保留会话**，错误进欢迎页的选择器。
+    Failed(String),
+}
+
+impl StartupLock {
+    /// 失败原因（用户可见文案）；`None` = 无项目或打开成功。
+    fn failure(&self) -> Option<&str> {
+        match self {
+            Self::Failed(error) => Some(error.as_str()),
+            _ => None,
+        }
+    }
+}
+
 impl WorkbenchView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         // P0：先解析当前项目会话（环境变量 → 设置「启动时恢复上次项目」→ 空态），供列表
@@ -11,11 +37,22 @@ impl WorkbenchView {
         // 否则启动后只看到全局连接，要等重新打开项目才出现项目侧连接。
         // 默认（开关关）解析结果为 `None` → 中央欢迎页，用户自己点项目进来。
         let project = crate::services::project_session::resolve(cx);
+        // 启动恢复的项目也要**取写锁**——时机与交互式打开一致：**在端口装配之前**
+        //（端口只是拄着 `Shared` 的句柄，真正读锁状态是调用 / 渲染那一刻）。
+        //
+        // 先取锁、再装配 `Shared`：`Shared::with_connections` 要用**最终**作用域的连接
+        // 初始化选中项，而取锁失败会让作用域退回「无项目」。
+        let startup = Self::acquire_startup_project(project.as_ref());
+        let startup_error = startup.failure().map(str::to_string);
+        // 恢复失败**不能假装打开**：会话退回空态，错误留给欢迎页的选择器。
+        // 否则标题栏显示项目名、实际既没锁也没 store，写操作要到别处才报错。
+        let project = if startup_error.is_some() { None } else { project };
         let project_root = project.as_ref().map(|p| p.root.clone());
         let (connections, notice) =
             crate::services::workspace_loader::load_connections_for_scope(project_root.as_deref());
         let shared = Shared::with_connections(connections, notice);
         *shared.project.borrow_mut() = project;
+        Self::apply_startup_lock(&shared, startup);
         // 分析底座：项目 / 全局分析库先发布给联邦会话，切档时 `analytics` / `rds_global`
         // 才在 SQL 里本来可见（见 `services::analysis_bases`）
         crate::services::analysis_bases::sync(project_root.as_deref());
@@ -33,11 +70,8 @@ impl WorkbenchView {
             // 没有项目（欢迎页）：清掉上一次项目的别名 / 主源 / 项目根
             None => engine::persistence::analysis_sources::clear_project(),
         }
-        // 启动恢复的项目也要**取写锁**——与改动前同一时机：**在端口装配之前**
-        //（端口只是拄着 `Shared` 的句柄，真正读锁状态是调用 / 渲染那一刻）。
-        Self::lock_startup_project(&shared, project_root);
         let mut view = Self::assemble(shared, true, cx);
-        view.install_startup_side_effects();
+        view.install_startup_side_effects(startup_error);
         view
     }
 
@@ -227,44 +261,64 @@ impl WorkbenchView {
     /// 启动恢复的项目也要**取写锁**：`project_ui.lock/read_only` 原本只在交互式打开时写，
     /// 而启动路径直接装会话——结果是「另一实例占着同一个项目」时两边都以为自己可写，
     /// 各模块的只读护栅（mock 的四个出口 / 资源库 / 草稿箱 / 编辑器替换）全部不生效。
-    /// 处置与交互式打开一致：被占用 → 只读打开 + 提示。
-    pub(super) fn lock_startup_project(shared: &Shared, project_root: Option<std::path::PathBuf>) {
-        let Some(root) = project_root else {
-            return;
+    /// 处置与交互式打开一致：被占用 → 只读打开 + 提示；打开失败 → 退回空态 + 错误可见。
+    fn acquire_startup_project(project: Option<&project::ui::OpenProject>) -> StartupLock {
+        let Some(project) = project else {
+            return StartupLock::None;
         };
-        let opened = match project::service::open(&root) {
-            Ok(project::service::OpenOutcome::Opened(opened)) => Ok(opened),
-            Ok(project::service::OpenOutcome::Busy(_)) => project::service::open_read_only(&root),
-            Err(e) => Err(e),
-        };
-        match opened {
-            Ok(opened) => {
-                let (store, lock, read_only, summary) = opened.into_parts();
-                // store 仅用于确认加载成功（与 `project::ui::apply_opened` 同口径）
-                drop(store);
-                let mut ui = shared.project_ui.borrow_mut();
-                ui.lock = lock;
-                ui.read_only = read_only;
-                // 标题栏项目菜单的「归档 / 取消归档」按这份缓存出文案：启动路径也写一次，
-                // 否则重启后菜单永远显示「归档」（实际可能已归档）。
-                ui.current_archived = summary.status == "archived";
-                ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
+        match project::service::open(&project.root) {
+            Ok(project::service::OpenOutcome::Opened(opened)) => {
+                StartupLock::Opened(Box::new(opened))
             }
-            // 取锁 / 载入失败：不动会话（项目仍是当前项目），只提示一声
-            Err(e) => shared.project_ui.borrow_mut().notice = Some(e),
+            // 被占用：与交互式打开同一处置（只读打开 + 提示）。只读也失败（例如结构损坏）
+            // 就退回空态——启动路径没有用户可点的「仍要打开」，不能瞎猜。
+            Ok(project::service::OpenOutcome::Busy(_)) => {
+                match project::service::open_read_only(&project.root) {
+                    Ok(opened) => StartupLock::Opened(Box::new(opened)),
+                    Err(error) => {
+                        tracing::warn!("启动只读打开项目失败：{error}");
+                        StartupLock::Failed(error)
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!("启动恢复项目失败：{error}");
+                StartupLock::Failed(error)
+            }
         }
     }
 
-    /// 启动期的两处副作用：项目下拉列表（无名册项目时）与洞察规则目录监听。
+    /// 把取锁结果写进共享状态（`store` 仅用于确认加载成功，与 `project::ui::apply_opened` 同口径）。
+    fn apply_startup_lock(shared: &Shared, startup: StartupLock) {
+        let StartupLock::Opened(opened) = startup else {
+            return;
+        };
+        let (store, lock, read_only, summary) = (*opened).into_parts();
+        drop(store);
+        let mut ui = shared.project_ui.borrow_mut();
+        ui.lock = lock;
+        ui.read_only = read_only;
+        // 标题栏项目菜单的「归档 / 取消归档」按这份缓存出文案：启动路径也写一次，
+        // 否则重启后菜单永远显示「归档」（实际可能已归档）。
+        ui.current_archived = summary.status == "archived";
+        ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
+    }
+
+    /// 启动期的三件事：项目名册预载、启动失败的提示落点、洞察规则目录监听。
     ///
-    /// 规则监听放在构造期（而非 render）——沿用 GPUI-kit 编码指南「副作用不得放在 render」，
+    /// 都在构造期做（而非 render）——沿用 GPUI-kit 编码指南「副作用不得放在 render」，
     /// 也保证窗口首帧前监听已就位；目录由「当前项目根」现算，故先告知监听器当前项目
     /// （切换时在 `refresh_after_open` 再告知）。
-    pub(super) fn install_startup_side_effects(&mut self) {
-        // 条件先算好再借用 host：`load_picker` 会回到 `Shared`，借着 `project` 不放会撞 RefCell。
-        let no_project = self.shared.project.borrow().is_none();
-        if no_project && let Some(host) = self.project_host.as_ref() {
+    pub(super) fn install_startup_side_effects(&mut self, startup_error: Option<String>) {
+        // 项目名册**总是**读一次：有项目时欢迎 tab 默认隐藏，但标题栏「回到欢迎页」与
+        // 设置「项目」页都渲染这份列表——启动不预载，它们会停在 `picker.loaded = false`
+        // 的「加载中…」空态（2026-11-27 修）。
+        if let Some(host) = self.project_host.as_ref() {
             project::ui::load_picker(host);
+        }
+        // 取锁 / 载入失败时用户就在欢迎页上，错误落进选择器（`notice` 也只在选择器里渲染）。
+        if let Some(error) = startup_error {
+            self.shared.project_ui.borrow_mut().picker.error = Some(error);
         }
         insight::set_watched_project_root(self.shared.project_root());
         self._insight_rules_watcher = Some(insight::RulesWatcher::spawn());
@@ -774,5 +828,46 @@ impl WorkbenchView {
     /// 刷新项目选择器（项目菜单「切换项目」等外部触发）。
     pub fn refresh_project_picker(&mut self, cx: &mut Context<Self>) {
         project::ui::refresh_picker(self.project_host(), cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // 显式列举依赖：`use super::*` 会把 gpui 的 `test` 宏带进来，与 `#[test]` 自相残杀
+    //（见 `.agents/skills/gpui-kit-dev/SKILL.md`「窗口测试」的坑 1）。
+    use super::{StartupLock, WorkbenchView};
+
+    /// 每例独立临时目录（结束时由调用方删除）。
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rds_startup_session_{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("创建临时目录");
+        dir
+    }
+
+    /// 没有会话 → 空态（欢迎页），不假装打开。
+    #[test]
+    fn startup_without_project_is_the_empty_state() {
+        assert!(matches!(
+            WorkbenchView::acquire_startup_project(None),
+            StartupLock::None
+        ));
+    }
+
+    /// 「目录在、`.RSmeta` 不在」的半坏项目：启动恢复必须判定失败，不能当作已打开
+    ///（失败会让会话退回空态、错误进欢迎页选择器，而不是标题栏显示项目名却写不进去）。
+    #[test]
+    fn startup_restore_rejects_half_broken_project() {
+        let dir = temp_dir("half_broken");
+        let project = project::ui::OpenProject::from_root(dir.clone());
+        let message = match WorkbenchView::acquire_startup_project(Some(&project)) {
+            StartupLock::Failed(message) => message,
+            _ => panic!("半坏项目不应被当作已打开"),
+        };
+        assert!(
+            message.contains(".RSmeta"),
+            "失败文案要说清缺什么（.RSmeta）：{message}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

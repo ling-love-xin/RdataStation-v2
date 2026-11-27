@@ -24,7 +24,9 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::sidebar::{Sidebar, SidebarCollapsible, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::tab::TabVariant;
+use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Side, TitleBar};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use scratchpad::scratchpad_view::render_scratchpad_file_info_pane;

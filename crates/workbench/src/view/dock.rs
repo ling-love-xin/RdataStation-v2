@@ -423,6 +423,10 @@ impl WorkbenchView {
             .as_ref()
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "未打开项目".to_string());
+        // 只读（写锁被另一实例持有）必须在**常驻位置**可见：启动路径拿不到窗口，塞不进 toast，
+        // 而 `project_ui.notice` 只在项目选择器里渲染（有项目时它默认隐藏）。
+        // 标题栏项目槽是唯一始终在视野里的落点（编辑器状态栏的「连接只读」只在有文档时出现）。
+        let read_only = self.shared.project_ui.borrow().read_only;
         // 触发器用语义控件（`Selectable` + 键盘可达由 `Button` 自带），不自己画可点 div。
         // 2026-10-19：随标题栏调高到 28px；加文件夹图标 + 1px 边框，让“挖空”槽在
         // 标题栏上有明确的可视轮廓（此前只有背景色，显得“显示不清楚”）。
@@ -452,12 +456,23 @@ impl WorkbenchView {
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.colors.foreground)
                             .child(project_name),
-                    ),
+                    )
+                    // 只读标：锁图标在语义上属"写锁被占"，文案与设置页状态行一致（只读）。
+                    .when(read_only, |d| {
+                        d.child(Tag::warning().small().child(tr("只读")))
+                    }),
             );
 
         // M1：有项目时项目槽本身就是菜单触发器（`Button::dropdown_menu`）——方向键导航 /
         // Enter / Escape / 点击外部关闭、焦点恢复都由语义组件负责，宿主不再持有 `menu_open`
         // 之类的开关状态（组件内部状态才是权威）。菜单内容由 `project` crate 提供。
+        //
+        // 只读时补一句悬停说明：徽标只管"是什么"，原因与后果（写操作不可用）放 tooltip。
+        let slot = if read_only {
+            slot.tooltip(tr("项目已被另一实例占用：只读打开，写操作不可用"))
+        } else {
+            slot
+        };
         let slot: AnyElement = if has_project {
             let host = self.project_host().clone();
             let inputs = self
@@ -485,6 +500,9 @@ impl WorkbenchView {
             .tooltip(tr("回到欢迎页"))
             .on_click(move |_, window, app| {
                 welcome_entity.update(app, |this, cx| {
+                    // 「回家」是看项目的入口：名册启动时预载过，但可能已落后（外部新建 / 手改名册），
+                    // 读一次再展示，别让用户看到陈旧列表（读盘在事件路径，render 仍纯读）。
+                    this.refresh_project_picker(cx);
                     this.shared.welcome_forced.set(true);
                     if let (Some(picker), Some(area)) = (&this.project_picker, &this.area) {
                         let id = PanelId::from(picker.entity_id());
