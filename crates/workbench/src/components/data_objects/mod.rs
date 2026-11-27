@@ -279,7 +279,45 @@ impl Group {
     }
 }
 
+/// 源段内的**两段**（`catalog-context-model.md` §7）：维度是可用性，不是业务身份。
+///
+/// - 第一段「参与分析」：catalog 此刻在实例里、SQL 能解析到表（会话源 / 底座 / 已挂载的连接）；
+/// - 第二段「可加入」：只剩意图（未挂 / 挂失败 / 已卸 / 未连接 / 只剩登记行）。
+///
+/// 为什么不在顶层加两个 `Group`：`Group` 是「对象形态」（源 / 表 / 文件），运营上是
+/// chips 筛选与折叠的键；两段只是源段内部的次序与子标题，塞进 `Group` 会让 chips
+/// 变成四格、所有 `Group::Source` 断言都要跟着改。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SourceSection {
+    /// 参与分析（可解析）：catalog 已在实例里
+    Ready,
+    /// 可加入（尚未生效）：有意向、还没挂上
+    Pending,
+}
+
+impl SourceSection {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Ready => "参与分析",
+            Self::Pending => "可加入",
+        }
+    }
+}
+
 impl Object {
+    /// 这条源行落在源段的哪一段（非源段返回 `None`）。
+    ///
+    /// 判据只有一个：**此刻能不能解析到表**（[`State::Ready`]）。业务身份（底座 / 联邦 /
+    /// 加速 / 已登记）不参与——那是小标的事。底座被会话遮蔽是 `State::Failed`，所以
+    /// 「已卸载」自然落进第二段，不需要特判。
+    pub fn source_section(&self) -> Option<SourceSection> {
+        (self.group == Group::Source).then(|| match self.state {
+            State::Ready => SourceSection::Ready,
+            // 挂载失败 / 未连接 / 未挂载 / 已失效 / 只剩登记：都还没生效
+            _ => SourceSection::Pending,
+        })
+    }
+
     /// 段内次序：同一段里「正在用的在上」。
     ///
     /// 三段之后同段混了多种身份（会话挂载 / 连接 / 资产 / 未登记 / 结果集），
@@ -287,13 +325,17 @@ impl Object {
     /// 所以把段内次序写死在这里，`sort_key` 直接用；名字只在同档内比较。
     pub fn rank(&self) -> u8 {
         match self.group {
-            // 源段四档（2026-11-27 定）：会话（正在生效）→ 底座（常驻地基）→ 文件库
-            // （按路径挂的库）→ 连接 / 登记行（候选、只剩意图的）。底座原先与连接同档，
-            // `analytics` 按字符序落在中文连接名之前，注释里的「底座紧随会话」从没在排序上成立过。
-            Group::Source => match self.key.split(':').next() {
-                Some("session") => 0,
-                Some("base") => 1,
-                Some("fileview") => 2,
+            // 源段按**可用性**先分两段（K2 后半，`catalog-context-model.md` §7）：
+            // 可解析（0–2）→ 尚未生效（3）。段内小档只表达"离生效有多近"：
+            // 正在生效的会话源 → 底座（常驻地基）→ 已挂载的连接；
+            // 只剩意图的一律 3，段内按名字排（它们之间没有"谁更近"可言）。
+            Group::Source => match self.source_section() {
+                Some(SourceSection::Ready) => match self.key.split(':').next() {
+                    Some("session") => 0,
+                    Some("base") => 1,
+                    _ => 2,
+                },
+                // 覆盖 `Pending` 与"非源段"的意外情形（后者不可能：group 已是 Source）
                 _ => 3,
             },
             Group::Table => match self.key.split(':').next() {
@@ -1798,7 +1840,7 @@ mod tests {
     // 刻意不用 `use super::*`：会把 gpui 的 `test` 属性宏带进作用域。
     use super::{
         can_archive_snapshot, fileview_alias, objects, AssetRow, Channel, Collected, ConnRow,
-        Group, Life, MountState, Object, SessionSource, State, UNMOUNTED_HINT,
+        Group, Life, MountState, Object, SessionSource, SourceSection, State, UNMOUNTED_HINT,
     };
     use engine::persistence::analysis_sources::{
         AnalysisMountKind, AnalysisSourceKind, AnalysisSourceRow,
@@ -1932,6 +1974,82 @@ mod tests {
         }
     }
 
+    /// K2 后半：源段按**可用性**分两段——可解析全在「尚未生效」之前。
+    /// 分段不看业务身份：未挂的连接 / 只剩登记 / 挂失败的会话都进第二段。
+    #[test]
+    fn source_rows_split_into_ready_and_pending_sections() {
+        let mut c = sample();
+        // 一条挂成功的会话源（没有归属连接 → 单出一行，State::Ready）
+        c.session_sources.push(SessionSource {
+            owner: "编辑器 · 另一个.sql".into(),
+            alias: "pg_src".into(),
+            conn_id: None,
+            note: String::new(),
+            failed: None,
+        });
+        let rows = objects(&c);
+        let sources: Vec<&Object> = rows.iter().filter(|row| row.group == Group::Source).collect();
+
+        let ready: Vec<&str> = sources
+            .iter()
+            .filter(|row| row.source_section() == Some(SourceSection::Ready))
+            .map(|row| row.key.as_str())
+            .collect();
+        let pending: Vec<&str> = sources
+            .iter()
+            .filter(|row| row.source_section() == Some(SourceSection::Pending))
+            .map(|row| row.key.as_str())
+            .collect();
+        assert!(
+            ready.iter().any(|key| key.contains("pg_src")),
+            "挂成功的会话源属于「参与分析」：{ready:?}"
+        );
+        assert!(
+            pending.iter().any(|key| key.contains("oracle_src")),
+            "挂失败的会话源属于「尚未生效」：{pending:?}"
+        );
+        assert!(
+            ready.iter().any(|key| *key == "conn:C_mysql_9"),
+            "已挂载的连接也在「参与分析」（它此刻能解析到表）：{ready:?}"
+        );
+
+        // 段序：先 Ready、后 Pending，中间不许插回来
+        let mut switched = false;
+        for row in &sources {
+            match row.source_section() {
+                Some(SourceSection::Ready) => {
+                    assert!(!switched, "可解析的行不许排在第二段后面：{}", row.key)
+                }
+                Some(SourceSection::Pending) => switched = true,
+                None => unreachable!("group == Source 必有段"),
+            }
+        }
+    }
+
+    /// 底座被会话遮蔽 = 已卸载 → 落进「尚未生效」，由 `State::Failed` 自然推出，不需要特判。
+    ///
+    /// 手工构造行（不依赖 `session::bases()`：测试进程里底座可能是空的，
+    /// 那样断言会变成"找不到行"而不是"分错段"）。
+    #[test]
+    fn a_hidden_base_drops_into_the_pending_section() {
+        let hidden_base = Object {
+            key: "base:analytics".to_string(),
+            name: "analytics".to_string(),
+            note: "已卸载 · 表段不再列它（显式限定名仍可达）".to_string(),
+            channel: Channel::Federated,
+            life: Life::Project,
+            state: State::Failed("已卸载 · 会话视角遮蔽（ATTACH 未动）".to_string()),
+            group: Group::Source,
+            pill: "底座",
+            version: None,
+            sql_ref: None,
+            expand_via: None,
+            source_action: None,
+        };
+        assert_eq!(hidden_base.source_section(), Some(SourceSection::Pending));
+        assert_eq!(hidden_base.rank(), 3, "已卸载的底座不能再排进可解析段");
+    }
+
     /// 段内次序：源段会话挂载在最上、连接在最下；表段资产在未登记之前、结果集最后。
     #[test]
     fn rank_puts_the_objects_in_use_first_within_a_group() {
@@ -1958,9 +2076,17 @@ mod tests {
         let sorted = source.clone();
         source.sort();
         assert_eq!(source, sorted, "源段内次序要被 rank 排好：{:?}", source);
-        // 段内第一档必须是会话挂载（正在用的那个），最后一档是连接
-        assert_eq!(source.first(), Some(&0), "会话挂载排第一档");
-        assert_eq!(source.last(), Some(&3), "源库连接排最后一档");
+        // 两段：可解析（0–2）必须全部排在尚未生效（3）之前
+        if let Some(position) = source.iter().position(|rank| *rank == 3) {
+            assert!(
+                source[position..].iter().all(|rank| *rank == 3),
+                "第二段之后不许再出现可解析的行：{source:?}"
+            );
+        }
+        assert!(
+            source.contains(&3),
+            "sample 里有未生效的源（挂失败的会话 / 只剩意图）：{source:?}"
+        );
 
         let mut table = ranks_of(Group::Table);
         assert_eq!(table[0], 0, "表段从资产开始");

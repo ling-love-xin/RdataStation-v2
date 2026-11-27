@@ -1242,7 +1242,41 @@ impl DataObjectsTab {
                 .unwrap_or(0)
         };
 
+        // 源段内的两段（K2 后半：可用性分段）：子段头要显示各自的计数，
+        // 先数一遍——子标题里现扫整表既慢又在行循环里重复算。
+        let section_count = |section: data_objects::SourceSection| {
+            objects
+                .iter()
+                .filter(|object| object.source_section() == Some(section))
+                .count()
+        };
+        let ready_count = section_count(data_objects::SourceSection::Ready);
+        let pending_count = section_count(data_objects::SourceSection::Pending);
+        // 子段头是**轻量标签**，不是可折叠的 `GroupHeader`：折叠的粒度仍是「源 / 表 / 文件」
+        // 三段（把折叠键一起拆细，会让已有的折叠状态映射全部失效，收益不值）。
+        let section_head = move |section: data_objects::SourceSection,
+                                  count: usize|
+              -> AnyElement {
+            let label = format!("{} · {}", section.title(), count);
+            div()
+                .pl_1p5()
+                .h_flex()
+                .items_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child(label.clone()),
+                )
+                .debug_selector(move || {
+                    format!("data-objects-section-{}", section.title())
+                })
+                .into_any_element()
+        };
+
         let mut drawn: Vec<Group> = Vec::new();
+        // 源段内两段的状态（只在画源段行时有意义）：切段时插一次子标题
+        let mut last_section: Option<data_objects::SourceSection> = None;
         for object in objects {
             if !drawn.contains(&object.group) {
                 // 补齐到当前组：中间的空段也先占一行段头
@@ -1260,6 +1294,20 @@ impl DataObjectsTab {
             // 收起只是不画行：段头和计数留着，折叠起来也知道里面有几行
             if self.collapsed.contains(&object.group) {
                 continue;
+            }
+            // 源段内两段的子标题（K2 后半）：行序已由 `Object::rank` 按可用性排好，
+            // 这里只管在段切换处插一条标签；段切成 0 次 = 只有一段，就只画一条。
+            if object.group == Group::Source {
+                if let Some(section) = object.source_section() {
+                    if last_section != Some(section) {
+                        let count = match section {
+                            data_objects::SourceSection::Ready => ready_count,
+                            data_objects::SourceSection::Pending => pending_count,
+                        };
+                        list = list.child(section_head(section, count));
+                        last_section = Some(section);
+                    }
+                }
             }
             // 不能分析的行还是得被看见（常常只是缺扩展），给个 warn 标而不是直接藏起来
             let pill = if object.can_analyze() {
